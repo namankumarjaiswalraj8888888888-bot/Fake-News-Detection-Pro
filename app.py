@@ -727,7 +727,7 @@ def create_app() -> gr.Blocks:
             </p>
         </div>
         """)
-
+gr.HTML("""
 <div class="app-footer" style="margin-top:1rem">
     <p style="font-size:1.1rem;font-weight:700;color:var(--text-primary);">
         👨‍💻 Project Team
@@ -768,7 +768,7 @@ def create_app() -> gr.Blocks:
         AI Fake News Detection & Live Verification System – Version 3
     </p>
 </div>
-
+  """)
         # ── Event Handlers ────────────────────────────────────────────────────────
 
         detect_btn.click(
