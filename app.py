@@ -14,6 +14,11 @@ Changes from V2
 - Model name shown in ML panel
 - All existing UI, CSS, sample news, and credits preserved
 
+Fixed for HuggingFace Spaces deployment:
+- Removed broken Jinja2 LRUCache monkey-patch (causes TypeError on HF)
+- Fixed demo.launch() — share=False, correct HF Spaces binding
+- Removed unnecessary socket/port-check code
+
 Government Polytechnic West Champaran — AI & ML Internship 2026
 Developed by: Naman Kumar & Parmeshwar
 """
@@ -24,7 +29,6 @@ import logging
 import os
 
 import gradio as gr
-
 from fact_checker import check_news
 
 logging.basicConfig(
@@ -64,7 +68,7 @@ SAMPLE_NEWS: dict[str, str] = {
     ),
 }
 
-# ── CSS Styling (preserved from V2, with minor V3 additions) ──────────────────
+# ── CSS Styling ───────────────────────────────────────────────────────────────
 
 CUSTOM_CSS = """
 /* ── Variables & Reset ── */
@@ -85,7 +89,6 @@ CUSTOM_CSS = """
     --shadow-hover: 0 8px 32px rgba(0,0,0,0.14);
 }
 
-/* Dark mode */
 @media (prefers-color-scheme: dark) {
     :root {
         --bg-light: #0f172a;
@@ -102,7 +105,6 @@ body, .gradio-container {
     color: var(--text-primary) !important;
 }
 
-/* ── Header ── */
 .app-header {
     background: linear-gradient(135deg, #1a56db 0%, #4338ca 50%, #7c3aed 100%);
     border-radius: var(--radius);
@@ -150,7 +152,6 @@ body, .gradio-container {
     letter-spacing: 0.3px;
 }
 
-/* ── Cards ── */
 .result-card {
     background: var(--card-bg);
     border: 1px solid var(--border);
@@ -162,7 +163,6 @@ body, .gradio-container {
 }
 .result-card:hover { box-shadow: var(--shadow-hover); }
 
-/* ── Verdict Banner ── */
 .verdict-real { border-left: 5px solid var(--real-green) !important; }
 .verdict-fake { border-left: 5px solid var(--fake-red) !important; }
 .verdict-unverified { border-left: 5px solid var(--unverified-amber) !important; }
@@ -171,7 +171,6 @@ body, .gradio-container {
 .verdict-label-fake  { color: var(--fake-red) !important; font-size: 1.8rem !important; font-weight: 800 !important; }
 .verdict-label-unverified { color: var(--unverified-amber) !important; font-size: 1.8rem !important; font-weight: 800 !important; }
 
-/* ── Source Pills ── */
 .source-pill {
     display: inline-block;
     background: rgba(26,86,219,0.1);
@@ -186,7 +185,6 @@ body, .gradio-container {
 .source-pill.real { background: rgba(5,150,105,0.1); color: var(--real-green); border-color: rgba(5,150,105,0.25); }
 .source-pill.fake { background: rgba(220,38,38,0.1); color: var(--fake-red); border-color: rgba(220,38,38,0.25); }
 
-/* ── Confidence Bar ── */
 .conf-bar-wrap {
     background: var(--border);
     border-radius: 999px;
@@ -203,7 +201,6 @@ body, .gradio-container {
 .conf-bar.fake { background: linear-gradient(90deg, #dc2626, #f87171); }
 .conf-bar.unverified { background: linear-gradient(90deg, #d97706, #fbbf24); }
 
-/* ── Input Area ── */
 .input-section textarea {
     border: 2px solid var(--border) !important;
     border-radius: var(--radius) !important;
@@ -217,7 +214,6 @@ body, .gradio-container {
     box-shadow: 0 0 0 3px rgba(26,86,219,0.15) !important;
 }
 
-/* ── Buttons ── */
 .btn-primary {
     background: linear-gradient(135deg, #1a56db, #4338ca) !important;
     color: #fff !important;
@@ -246,7 +242,6 @@ body, .gradio-container {
     color: var(--brand-blue) !important;
 }
 
-/* ── Sample Buttons ── */
 .sample-btn {
     background: var(--card-bg) !important;
     border: 1.5px solid var(--border) !important;
@@ -264,7 +259,6 @@ body, .gradio-container {
     transform: translateY(-1px) !important;
 }
 
-/* ── Section Labels ── */
 .section-label {
     font-size: 0.7rem !important;
     font-weight: 700 !important;
@@ -274,7 +268,6 @@ body, .gradio-container {
     margin-bottom: 0.5rem !important;
 }
 
-/* ── Mini confidence bars (V3) ── */
 .mini-bar-wrap {
     background: var(--border);
     border-radius: 999px;
@@ -293,7 +286,6 @@ body, .gradio-container {
 .mini-bar.ov-fake   { background: linear-gradient(90deg, #dc2626, #f87171); }
 .mini-bar.ov-unv    { background: linear-gradient(90deg, #d97706, #fbbf24); }
 
-/* ── Footer ── */
 .app-footer {
     background: var(--card-bg);
     border: 1px solid var(--border);
@@ -312,14 +304,12 @@ body, .gradio-container {
     color: var(--brand-blue) !important;
 }
 
-/* ── Animations ── */
 @keyframes fadeInUp {
     from { opacity: 0; transform: translateY(16px); }
     to   { opacity: 1; transform: translateY(0); }
 }
 .fade-in { animation: fadeInUp 0.4s ease forwards; }
 
-/* ── Responsive ── */
 @media (max-width: 768px) {
     .app-header h1 { font-size: 1.4rem !important; }
     .app-header { padding: 1.5rem 1rem; }
@@ -339,9 +329,6 @@ def _verdict_label(verdict: str) -> str:
 
 
 def build_result_html(result: dict) -> str:
-    """Convert a check_news() result dict into a rich HTML display."""
-
-    # ── Error state ────────────────────────────────────────────────────────────
     if result.get("error") and not result.get("verdict"):
         return (
             '<div class="result-card verdict-unverified fade-in">'
@@ -350,22 +337,21 @@ def build_result_html(result: dict) -> str:
             "</div>"
         )
 
-    verdict          = result.get("verdict",            "UNVERIFIED")
-    overall_conf     = result.get("overall_confidence", result.get("confidence", 0))
-    ml_conf_pct      = result.get("ml_confidence",      50)
-    ev_conf_pct      = result.get("evidence_confidence", 0)
-    icon             = _verdict_icon(verdict)
-    label            = _verdict_label(verdict)
-    reasoning        = result.get("reasoning",          [])
-    ml               = result.get("ml_result",          {})
-    ling             = result.get("linguistic_signals", {})
-    ev               = result.get("evidence_result",    {})
-    elapsed          = result.get("elapsed_seconds",    0)
-    primary_claim    = result.get("primary_claim",      "")
-    url_meta         = result.get("url_meta",           {})
-    vclass           = verdict.lower()
+    verdict       = result.get("verdict",            "UNVERIFIED")
+    overall_conf  = result.get("overall_confidence", result.get("confidence", 0))
+    ml_conf_pct   = result.get("ml_confidence",      50)
+    ev_conf_pct   = result.get("evidence_confidence", 0)
+    icon          = _verdict_icon(verdict)
+    label         = _verdict_label(verdict)
+    reasoning     = result.get("reasoning",          [])
+    ml            = result.get("ml_result",          {})
+    ling          = result.get("linguistic_signals", {})
+    ev            = result.get("evidence_result",    {})
+    elapsed       = result.get("elapsed_seconds",    0)
+    primary_claim = result.get("primary_claim",      "")
+    url_meta      = result.get("url_meta",           {})
+    vclass        = verdict.lower()
 
-    # ── Overall confidence bar ─────────────────────────────────────────────────
     ov_bar_class = (
         "ov-color" if verdict == "REAL" else
         "ov-fake"  if verdict == "FAKE" else
@@ -379,14 +365,12 @@ def build_result_html(result: dict) -> str:
         Overall Confidence: <strong>{overall_conf}%</strong>
     </p>"""
 
-    # ── Reasoning ──────────────────────────────────────────────────────────────
     reasoning_html = "".join(
         f'<li style="margin-bottom:0.4rem;color:var(--text-secondary);font-size:0.9rem">'
         f'<span style="color:var(--brand-blue)">▸</span> {r}</li>'
         for r in reasoning
     )
 
-    # ── Primary claim ──────────────────────────────────────────────────────────
     claim_html = ""
     if primary_claim:
         claim_html = f"""
@@ -398,7 +382,6 @@ def build_result_html(result: dict) -> str:
         </p>
     </div>"""
 
-    # ── URL meta ───────────────────────────────────────────────────────────────
     url_html = ""
     if url_meta.get("is_url"):
         url_html = f"""
@@ -412,12 +395,10 @@ def build_result_html(result: dict) -> str:
         </p>
     </div>"""
 
-    # ── Confidence breakdown (V3 new section) ──────────────────────────────────
     conf_breakdown = f"""
     <div class="result-card" style="margin-top:1rem">
         <p class="section-label">📊 Confidence Breakdown</p>
         <div style="display:grid;gap:0.75rem">
-
             <div>
                 <div style="display:flex;justify-content:space-between;font-size:0.82rem">
                     <span style="color:var(--text-secondary)">🤖 ML Confidence</span>
@@ -427,7 +408,6 @@ def build_result_html(result: dict) -> str:
                     <div class="mini-bar ml-color" style="width:{ml_conf_pct}%"></div>
                 </div>
             </div>
-
             <div>
                 <div style="display:flex;justify-content:space-between;font-size:0.82rem">
                     <span style="color:var(--text-secondary)">🌐 Evidence Confidence</span>
@@ -437,7 +417,6 @@ def build_result_html(result: dict) -> str:
                     <div class="mini-bar ev-color" style="width:{ev_conf_pct}%"></div>
                 </div>
             </div>
-
             <div>
                 <div style="display:flex;justify-content:space-between;font-size:0.82rem">
                     <span style="color:var(--text-secondary)">⚖️ Overall Confidence</span>
@@ -447,14 +426,12 @@ def build_result_html(result: dict) -> str:
                     <div class="mini-bar {ov_bar_class}" style="width:{overall_conf}%"></div>
                 </div>
             </div>
-
         </div>
     </div>"""
 
-    # ── ML Analysis ────────────────────────────────────────────────────────────
-    prob_real    = int(ml.get("prob_real", 0.5) * 100)
-    prob_fake    = int(ml.get("prob_fake", 0.5) * 100)
-    model_name   = ml.get("model_name", "ML Model")
+    prob_real  = int(ml.get("prob_real", 0.5) * 100)
+    prob_fake  = int(ml.get("prob_fake", 0.5) * 100)
+    model_name = ml.get("model_name", "ML Model")
     ml_html = f"""
     <div class="result-card" style="margin-top:1rem">
         <p class="section-label">🤖 ML Model Analysis</p>
@@ -487,12 +464,11 @@ def build_result_html(result: dict) -> str:
         </div>
     </div>"""
 
-    # ── Evidence sources ───────────────────────────────────────────────────────
-    supporting   = ev.get("supporting_sources",    [])
-    contradicting= ev.get("contradicting_sources", [])
-    neutral      = ev.get("neutral_sources",       [])
-    sources_found= ev.get("sources_found",         0)
-    avg_trust    = ev.get("avg_trust_score",        0)
+    supporting    = ev.get("supporting_sources",    [])
+    contradicting = ev.get("contradicting_sources", [])
+    neutral       = ev.get("neutral_sources",       [])
+    sources_found = ev.get("sources_found",         0)
+    avg_trust     = ev.get("avg_trust_score",        0)
 
     sup_pills = "".join(f'<span class="source-pill real">✅ {s}</span>' for s in supporting)
     con_pills = "".join(f'<span class="source-pill fake">❌ {s}</span>' for s in contradicting)
@@ -524,7 +500,6 @@ def build_result_html(result: dict) -> str:
         {f'<p style="font-size:0.8rem;margin:0.5rem 0 0.2rem;font-weight:600;color:var(--text-secondary)">Neutral References:</p>{neu_pills}' if neutral else ''}
     </div>"""
 
-    # ── Articles list (V3: shows publication date, trust score, source link) ──
     articles = ev.get("articles", [])
     if articles:
         article_rows = "".join(
@@ -555,19 +530,13 @@ def build_result_html(result: dict) -> str:
     else:
         articles_html = ""
 
-    # ── Keywords ───────────────────────────────────────────────────────────────
-    keywords  = result.get("keywords", [])
-    kw_pills  = "".join(f'<span class="source-pill">{k}</span>' for k in keywords[:8])
+    keywords = result.get("keywords", [])
+    kw_pills = "".join(f'<span class="source-pill">{k}</span>' for k in keywords[:8])
 
     return f"""
     <div class="fade-in">
-        <!-- URL / Article info -->
         {url_html}
-
-        <!-- Primary Claim -->
         {claim_html}
-
-        <!-- Main verdict card -->
         <div class="result-card verdict-{vclass}">
             <p class="section-label">VERDICT</p>
             <p class="verdict-label-{vclass}" style="margin:0 0 0.25rem">{icon} {label}</p>
@@ -578,20 +547,10 @@ def build_result_html(result: dict) -> str:
                 {reasoning_html}
             </ul>
         </div>
-
-        <!-- Confidence Breakdown -->
         {conf_breakdown}
-
-        <!-- ML Analysis -->
         {ml_html}
-
-        <!-- Evidence -->
         {evidence_html}
-
-        <!-- Articles -->
         {articles_html}
-
-        <!-- Keywords & Meta -->
         <div class="result-card" style="margin-top:1rem">
             <p class="section-label">🔑 Extracted Keywords</p>
             <div style="margin-bottom:0.75rem">
@@ -607,7 +566,6 @@ def build_result_html(result: dict) -> str:
 # ── Gradio Interface Functions ─────────────────────────────────────────────────
 
 def run_check(news_input: str) -> tuple[str, str]:
-    """Called when the user clicks 'Detect & Verify'."""
     if not news_input or not news_input.strip():
         return (
             '<div class="result-card verdict-unverified">'
@@ -618,13 +576,13 @@ def run_check(news_input: str) -> tuple[str, str]:
     result   = check_news(news_input)
     html_out = build_result_html(result)
 
-    verdict    = result.get("verdict",            "UNVERIFIED")
-    ov_conf    = result.get("overall_confidence", result.get("confidence", 0))
-    ml_conf    = result.get("ml_confidence",      50)
-    ev_conf    = result.get("evidence_confidence", 0)
-    reasoning  = "\n".join(f"  • {r}" for r in result.get("reasoning", []))
-    ev_sources = result.get("evidence_result", {}).get("sources_found", 0)
-    model_name = result.get("ml_result", {}).get("model_name", "ML Model")
+    verdict   = result.get("verdict",            "UNVERIFIED")
+    ov_conf   = result.get("overall_confidence", result.get("confidence", 0))
+    ml_conf   = result.get("ml_confidence",      50)
+    ev_conf   = result.get("evidence_confidence", 0)
+    reasoning = "\n".join(f"  • {r}" for r in result.get("reasoning", []))
+    ev_sources= result.get("evidence_result", {}).get("sources_found", 0)
+    model_name= result.get("ml_result", {}).get("model_name", "ML Model")
 
     summary = (
         f"AI FAKE NEWS DETECTION RESULT — VERSION 3\n"
@@ -661,9 +619,9 @@ def create_app() -> gr.Blocks:
             secondary_hue="indigo",
             neutral_hue="slate",
         ),
+        fill_height=False,
     ) as demo:
 
-        # ── Header ──────────────────────────────────────────────────────────────
         gr.HTML("""
         <div class="app-header">
             <h1>🔍 AI Fake News Detection &amp; Live Verification System</h1>
@@ -679,9 +637,7 @@ def create_app() -> gr.Blocks:
         </div>
         """)
 
-        # ── Main Content ─────────────────────────────────────────────────────────
         with gr.Row():
-            # Left Column: Input
             with gr.Column(scale=1, elem_classes=["input-section"]):
 
                 gr.HTML('<p class="section-label">📋 Enter News Text or Paste a News Article URL</p>')
@@ -737,7 +693,6 @@ def create_app() -> gr.Blocks:
                 </div>
                 """)
 
-            # Right Column: Results
             with gr.Column(scale=1):
                 gr.HTML('<p class="section-label">📊 Verification Result</p>')
                 result_html = gr.HTML(
@@ -761,7 +716,6 @@ def create_app() -> gr.Blocks:
                         show_copy_button=True,
                     )
 
-        # ── Disclaimer ────────────────────────────────────────────────────────────
         gr.HTML("""
         <div class="result-card" style="margin-top:0.5rem;background:rgba(26,86,219,0.04);
              border-color:rgba(26,86,219,0.2)">
@@ -774,7 +728,6 @@ def create_app() -> gr.Blocks:
         </div>
         """)
 
-        # ── Developer & Footer ────────────────────────────────────────────────────
         gr.HTML("""
         <div class="app-footer" style="margin-top:1rem">
             <p style="font-size:1rem;font-weight:700;color:var(--text-primary);margin-bottom:0.5rem">
@@ -824,12 +777,15 @@ def create_app() -> gr.Blocks:
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
+demo = create_app()
 
-if __name__ == "__main__":
-    app = create_app()
-    app.launch(
-        server_name="0.0.0.0",
-        server_port=int(os.environ.get("PORT", 7860)),
-        share=False,
-        show_error=True,
-    )
+# HF Spaces: server_name must be "0.0.0.0", share must be False.
+# The platform handles routing — share=True causes a conflict on Spaces.
+# Locally: share=False also works fine (localhost:7860).
+demo.launch(
+    server_name="0.0.0.0",
+    server_port=7860,
+    share=False,
+    show_error=True,
+    allowed_paths=["."],
+)
