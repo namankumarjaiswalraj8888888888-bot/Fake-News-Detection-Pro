@@ -1,0 +1,35 @@
+==============================================================
+  AI Fake News Detection — V3 Model Training Report
+==============================================================
+
+  Best Model     : Multinomial Naive Bayes
+  Best CV Score  : 0.9035
+  Test Accuracy  : 0.913
+  ROC-AUC        : 0.9167
+  Train Samples  : 92
+  Test Samples   : 23
+
+  Model Comparison Results:
+  Logistic Regression                 CV: 0.8368 ± 0.0667
+  Linear SVM (Calibrated)             CV: 0.8602 ± 0.0789
+  Passive Aggressive (Cal.)           CV: 0.8497 ± 0.0903
+  Multinomial Naive Bayes             CV: 0.9035 ± 0.0697
+
+              precision    recall  f1-score   support
+
+        REAL       0.92      0.92      0.92        12
+        FAKE       0.91      0.91      0.91        11
+
+    accuracy                           0.91        23
+   macro avg       0.91      0.91      0.91        23
+weighted avg       0.91      0.91      0.91        23
+
+Confusion Matrix:
+  [11, 1]
+  [1, 10]
+
+==============================================================
+  Developed by: Naman Kumar & Parmeshwar
+  Government Polytechnic West Champaran
+  AI & ML Internship 2026
+==============================================================
