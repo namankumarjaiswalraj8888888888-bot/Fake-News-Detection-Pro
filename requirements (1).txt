@@ -1,0 +1,14 @@
+# AI Fake News Detection & Live Verification System — Version 3
+# Government Polytechnic West Champaran -- AI & ML Internship 2026
+# Developed by: Naman Kumar & Parmeshwar
+
+# Core ML dependencies
+scikit-learn>=1.4.0,<2.0.0
+numpy>=1.26.0,<3.0.0
+pandas>=2.1.0,<4.0.0
+
+# Gradio — 4.44.0 has a known HfFolder import bug with newer huggingface_hub.
+# Using 5.x which removed the HfFolder dependency entirely.
+# Also pin huggingface_hub to a compatible version.
+gradio>=5.0.0,<6.0.0
+huggingface_hub>=0.24.0,<2.0.0
