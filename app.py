@@ -728,23 +728,46 @@ def create_app() -> gr.Blocks:
         </div>
         """)
 
-        gr.HTML("""
-        <div class="app-footer" style="margin-top:1rem">
-            <p style="font-size:1rem;font-weight:700;color:var(--text-primary);margin-bottom:0.5rem">
-                👨‍💻 Developed By
-            </p>
-            <p><span class="dev-name">Naman Kumar</span> &amp; <span class="dev-name">Parmeshwar</span></p>
-            <p style="margin-top:0.75rem">
-                🎓 AI &amp; Machine Learning Internship Project 2026<br>
-                <strong>Government Polytechnic West Champaran</strong><br>
-                Department of Computer Science &amp; Engineering · SBTE Bihar · Diploma Engineering<br>
-                Session 2025–2028
-            </p>
-            <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
-            <p>© 2026 Naman Kumar &amp; Parmeshwar · Government Polytechnic West Champaran<br>
-            AI &amp; Machine Learning Internship Project — Version 3</p>
-        </div>
-        """)
+<div class="app-footer" style="margin-top:1rem">
+    <p style="font-size:1.1rem;font-weight:700;color:var(--text-primary);">
+        👨‍💻 Project Team
+    </p>
+
+    <p><span class="dev-name">Mr. Naman Kumar</span><br>
+    Project Lead • Full Stack AI Developer • UI/UX Designer</p>
+
+    <p><span class="dev-name">Mr. Parmeshwar Kumar</span><br>
+    Backend Developer • API Integration</p>
+
+    <p><span class="dev-name">Mr. Amit Kumar</span><br>
+    Machine Learning Engineer • Dataset & Model Training</p>
+
+    <p><span class="dev-name">Mr. Prince Kumar Chaurasiya</span><br>
+    Research & Documentation Lead</p>
+
+    <p><span class="dev-name">Mr. Dhiraj Kumar</span><br>
+    QA Engineer • Performance Testing</p>
+
+    <p><strong>Project Mentor</strong><br>
+    MD. Tausim Akhtar</p>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
+
+    <p>
+        🎓 AI & Machine Learning Internship Project 2026<br>
+        <strong>Government Polytechnic West Champaran</strong><br>
+        Department of Computer Science & Engineering<br>
+        <strong>Affiliated to State Board of Technical Education (SBTE), Bihar</strong><br>
+        Session 2025–2028
+    </p>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
+
+    <p>
+        © 2026 Government Polytechnic West Champaran • SBTE Bihar<br>
+        AI Fake News Detection & Live Verification System – Version 3
+    </p>
+</div>
 
         # ── Event Handlers ────────────────────────────────────────────────────────
 
