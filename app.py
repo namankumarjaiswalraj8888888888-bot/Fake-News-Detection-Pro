@@ -768,7 +768,7 @@ gr.HTML("""
         AI Fake News Detection & Live Verification System – Version 3
     </p>
 </div>
-  """)
+""")
         # ── Event Handlers ────────────────────────────────────────────────────────
 
         detect_btn.click(
