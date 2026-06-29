@@ -1,35 +1,44 @@
 """
 app.py
 ======
-AI Fake News Detection & Live Verification System — Version 3
-Gradio-powered web application.
+Version 4 — Professional Gradio UI for AI Fake News Detection System.
 
-Changes from V2
----------------
-- Added URL input mode (paste any news article URL)
-- Confidence breakdown panel: ML Confidence, Evidence Confidence, Overall
-- Source Trust Score displayed alongside source names
-- Primary Claim extracted and shown
-- Publication dates shown for referenced articles
-- Model name shown in ML panel
-- All existing UI, CSS, sample news, and credits preserved
+Features
+--------
+- Dark / Light mode with system preference detection
+- Fully responsive (mobile-first)
+- Animated confidence meters (CSS keyframe, no flash-to-full bug)
+- Professional source cards with trust badges
+- Keyword highlighting
+- Export: PDF, TXT, JSON
+- Session history with statistics panel
+- Loading state with step-by-step progress indicator
+- URL mode banner
+- Professional team footer
+- All text sanitised before HTML injection (XSS-safe)
 
-Fixed for HuggingFace Spaces deployment:
-- Removed broken Jinja2 LRUCache monkey-patch (causes TypeError on HF)
-- Fixed demo.launch() — share=False, correct HF Spaces binding
-- Removed unnecessary socket/port-check code
-
+AI Fake News Detection & Live Verification System — Version 4
 Government Polytechnic West Champaran — AI & ML Internship 2026
 Developed by: Naman Kumar & Parmeshwar
 """
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 
 import gradio as gr
+
+from config import (
+    APP_TITLE, APP_VERSION, INSTITUTION, DEVELOPERS,
+    SERVER_HOST, SERVER_PORT, SERVER_SHARE, SERVER_SHOW_ERROR,
+)
+from constants import SAMPLE_NEWS
 from fact_checker import check_news
+from export import export_pdf, export_txt, export_json, format_report_text
+from history import VerificationHistory
+from styles import CSS, THEME_JS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,1213 +46,762 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Sample News ───────────────────────────────────────────────────────────────
+# ── HTML Safety ───────────────────────────────────────────────────────────────
 
-SAMPLE_NEWS: dict[str, str] = {
-    "✅ Real: ISRO Mission": (
-        "ISRO successfully tests reusable launch vehicle for future space missions. "
-        "The Indian Space Research Organisation conducted the test from the Satish "
-        "Dhawan Space Centre, Sriharikota. The mission paves the way for cost-effective "
-        "launches in the coming decade."
-    ),
-    "❌ Fake: Microchip Vaccine": (
-        "SHOCKING: Bill Gates admits he put microchips in COVID-19 vaccines to track "
-        "the population worldwide! Secret documents LEAKED from WHO confirm global "
-        "surveillance plan. Share before this is DELETED by mainstream media!"
-    ),
-    "⚠ Ambiguous: Cure Claim": (
-        "Scientists say drinking turmeric water every morning for 30 days completely "
-        "reverses diabetes and cancer. This ancient remedy was suppressed by the pharma "
-        "lobby for decades. 100% guaranteed results with no side effects."
-    ),
-    "✅ Real: RBI Policy": (
-        "Reserve Bank of India raises repo rate by 25 basis points to 6.75 percent "
-        "to control inflation. The Monetary Policy Committee voted 5-1 in favor of "
-        "the rate hike, according to an official RBI press release."
-    ),
-    "❌ Fake: WhatsApp Hoax": (
-        "URGENT: WhatsApp will start charging Rs 10 per message from next Monday! "
-        "Forward this to all your contacts immediately to activate your free lifetime "
-        "subscription before the deadline. Government has approved this new policy!"
-    ),
-}
-
-# ── CSS Styling ───────────────────────────────────────────────────────────────
-
-CUSTOM_CSS = """
-/* ── Google Fonts Import ── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap');
-
-/* ── CSS Variables — Light Mode ── */
-:root {
-    --brand-blue: #2563eb;
-    --brand-indigo: #4f46e5;
-    --brand-purple: #7c3aed;
-    --brand-cyan: #0891b2;
-    --real-green: #059669;
-    --real-green-light: rgba(5,150,105,0.12);
-    --fake-red: #dc2626;
-    --fake-red-light: rgba(220,38,38,0.1);
-    --unverified-amber: #d97706;
-    --unverified-amber-light: rgba(217,119,6,0.1);
-
-    /* Layout */
-    --bg-base: #f0f4ff;
-    --bg-surface: rgba(255,255,255,0.72);
-    --bg-surface-hover: rgba(255,255,255,0.9);
-    --card-bg: rgba(255,255,255,0.75);
-    --card-border: rgba(148,163,184,0.25);
-    --card-blur: blur(16px);
-    --input-bg: rgba(255,255,255,0.85);
-    --input-text: #0f172a;
-    --input-border: rgba(148,163,184,0.35);
-
-    /* Typography */
-    --text-primary: #0f172a;
-    --text-secondary: #475569;
-    --text-muted: #94a3b8;
-
-    /* Geometry */
-    --radius-sm: 10px;
-    --radius: 16px;
-    --radius-lg: 20px;
-    --radius-xl: 28px;
-
-    /* Shadows */
-    --shadow-sm: 0 2px 12px rgba(37,99,235,0.06);
-    --shadow: 0 8px 32px rgba(37,99,235,0.10);
-    --shadow-hover: 0 16px 48px rgba(37,99,235,0.16);
-    --shadow-card: 0 4px 24px rgba(15,23,42,0.06);
-    --shadow-glow-blue: 0 0 32px rgba(37,99,235,0.25);
-}
-
-/* ── Dark Mode Variables ── */
-.dark,
-.dark .gradio-container,
-@media (prefers-color-scheme: dark) { :root {
-    --bg-base: #060d1f;
-    --bg-surface: rgba(15,23,42,0.80);
-    --bg-surface-hover: rgba(30,41,59,0.90);
-    --card-bg: rgba(15,23,42,0.75);
-    --card-border: rgba(100,116,139,0.20);
-    --input-bg: rgba(15,23,42,0.85);
-    --input-text: #e2e8f0;
-    --input-border: rgba(100,116,139,0.30);
-    --text-primary: #f1f5f9;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
-    --shadow: 0 8px 32px rgba(0,0,0,0.40);
-    --shadow-hover: 0 16px 48px rgba(0,0,0,0.50);
-    --shadow-card: 0 4px 24px rgba(0,0,0,0.30);
-}}
-
-.dark {
-    --bg-base: #060d1f !important;
-    --bg-surface: rgba(15,23,42,0.80) !important;
-    --bg-surface-hover: rgba(30,41,59,0.90) !important;
-    --card-bg: rgba(15,23,42,0.75) !important;
-    --card-border: rgba(100,116,139,0.20) !important;
-    --input-bg: rgba(15,23,42,0.85) !important;
-    --input-text: #e2e8f0 !important;
-    --input-border: rgba(100,116,139,0.30) !important;
-    --text-primary: #f1f5f9 !important;
-    --text-secondary: #94a3b8 !important;
-    --text-muted: #64748b !important;
-}
-
-/* ── Base Reset ── */
-*, *::before, *::after { box-sizing: border-box; }
-
-body, .gradio-container {
-    background: var(--bg-base) !important;
-    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif !important;
-    color: var(--text-primary) !important;
-    -webkit-font-smoothing: antialiased;
-}
-
-/* Animated background mesh */
-body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background:
-        radial-gradient(ellipse 80% 60% at 20% 10%, rgba(37,99,235,0.08) 0%, transparent 60%),
-        radial-gradient(ellipse 60% 50% at 80% 80%, rgba(124,58,237,0.07) 0%, transparent 60%),
-        radial-gradient(ellipse 70% 40% at 60% 30%, rgba(8,145,178,0.05) 0%, transparent 60%);
-    pointer-events: none;
-    z-index: 0;
-}
-
-/* ── Typography Inheritance ── */
-p, span, li, label, div, td, th, h1, h2, h3, h4, h5, h6 { color: inherit; }
-
-/* ── Gradio overrides ── */
-.gradio-container label,
-.gradio-container .label-wrap span,
-.gradio-container .prose,
-.gradio-container span.svelte-1ipelgc { color: var(--text-primary) !important; }
-
-.gradio-container input,
-.gradio-container textarea,
-.gradio-container select {
-    background: var(--input-bg) !important;
-    color: var(--input-text) !important;
-    border-color: var(--input-border) !important;
-}
-
-.gradio-container .accordion-header,
-.gradio-container details > summary {
-    color: var(--text-primary) !important;
-    background: var(--card-bg) !important;
-}
-
-.gradio-container .radio-group label,
-.gradio-container .checkbox-group label { color: var(--text-primary) !important; }
-
-textarea, input[type="text"] {
-    background: var(--input-bg) !important;
-    color: var(--input-text) !important;
-}
-
-/* ── Glassmorphism Card ── */
-.result-card {
-    background: var(--card-bg);
-    backdrop-filter: var(--card-blur);
-    -webkit-backdrop-filter: var(--card-blur);
-    border: 1px solid var(--card-border);
-    border-radius: var(--radius);
-    padding: 1.5rem;
-    margin-bottom: 1rem;
-    box-shadow: var(--shadow-card);
-    transition: transform 0.22s cubic-bezier(0.4,0,0.2,1),
-                box-shadow 0.22s cubic-bezier(0.4,0,0.2,1);
-    position: relative;
-    overflow: hidden;
-}
-.result-card::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, transparent 60%);
-    pointer-events: none;
-}
-.result-card:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-hover);
-}
-
-/* ── Verdict Accent Borders ── */
-.verdict-real    { border-left: 4px solid var(--real-green) !important; background: linear-gradient(135deg, var(--card-bg), rgba(5,150,105,0.04)) !important; }
-.verdict-fake    { border-left: 4px solid var(--fake-red) !important; background: linear-gradient(135deg, var(--card-bg), rgba(220,38,38,0.04)) !important; }
-.verdict-unverified { border-left: 4px solid var(--unverified-amber) !important; background: linear-gradient(135deg, var(--card-bg), rgba(217,119,6,0.04)) !important; }
-
-/* ── Verdict Labels ── */
-.verdict-label-real  { color: var(--real-green) !important; font-size: 2rem !important; font-weight: 900 !important; letter-spacing: -0.5px; }
-.verdict-label-fake  { color: var(--fake-red) !important; font-size: 2rem !important; font-weight: 900 !important; letter-spacing: -0.5px; }
-.verdict-label-unverified { color: var(--unverified-amber) !important; font-size: 2rem !important; font-weight: 900 !important; letter-spacing: -0.5px; }
-
-/* ── Pills / Badges ── */
-.source-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    background: rgba(37,99,235,0.08);
-    color: var(--brand-blue);
-    border: 1px solid rgba(37,99,235,0.2);
-    border-radius: 999px;
-    padding: 0.22rem 0.7rem;
-    font-size: 0.73rem;
-    font-weight: 600;
-    margin: 0.15rem;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-.source-pill:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(37,99,235,0.15); }
-.source-pill.real { background: rgba(5,150,105,0.09); color: var(--real-green); border-color: rgba(5,150,105,0.22); }
-.source-pill.fake { background: rgba(220,38,38,0.09); color: var(--fake-red); border-color: rgba(220,38,38,0.22); }
-
-/* ── Confidence Bars ── */
-.conf-bar-wrap {
-    background: rgba(148,163,184,0.2);
-    border-radius: 999px;
-    height: 10px;
-    overflow: hidden;
-    margin: 0.5rem 0;
-    position: relative;
-}
-.conf-bar {
-    height: 100%;
-    border-radius: 999px;
-    transition: width 1s cubic-bezier(0.4,0,0.2,1);
-    position: relative;
-}
-.conf-bar::after {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 50%;
-    background: rgba(255,255,255,0.25);
-    border-radius: 999px;
-}
-.conf-bar.real { background: linear-gradient(90deg, #059669, #10b981, #34d399); }
-.conf-bar.fake { background: linear-gradient(90deg, #dc2626, #ef4444, #f87171); }
-.conf-bar.unverified { background: linear-gradient(90deg, #d97706, #f59e0b, #fbbf24); }
-
-/* ── Mini Bars ── */
-.mini-bar-wrap {
-    background: rgba(148,163,184,0.18);
-    border-radius: 999px;
-    height: 7px;
-    overflow: hidden;
-    margin: 0.25rem 0 0.6rem;
-    width: 100%;
-}
-.mini-bar {
-    height: 100%;
-    border-radius: 999px;
-    transition: width 1.1s cubic-bezier(0.4,0,0.2,1);
-}
-.mini-bar.ml-color { background: linear-gradient(90deg, #4338ca, #6366f1, #818cf8); }
-.mini-bar.ev-color { background: linear-gradient(90deg, #0891b2, #06b6d4, #67e8f9); }
-.mini-bar.ov-color { background: linear-gradient(90deg, #059669, #10b981, #34d399); }
-.mini-bar.ov-fake  { background: linear-gradient(90deg, #dc2626, #ef4444, #f87171); }
-.mini-bar.ov-unv   { background: linear-gradient(90deg, #d97706, #f59e0b, #fbbf24); }
-
-/* ── Header ── */
-.app-header {
-    background: linear-gradient(135deg, #1a3a8f 0%, #2563eb 30%, #4f46e5 65%, #7c3aed 100%);
-    border-radius: var(--radius-xl);
-    padding: 3rem 2rem 2.5rem;
-    text-align: center;
-    margin-bottom: 1.5rem;
-    position: relative;
-    overflow: hidden;
-    box-shadow: 0 20px 60px rgba(37,99,235,0.35);
-}
-.app-header::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background:
-        radial-gradient(circle at 20% 50%, rgba(255,255,255,0.08) 0%, transparent 50%),
-        radial-gradient(circle at 80% 20%, rgba(255,255,255,0.06) 0%, transparent 40%);
-    pointer-events: none;
-}
-.app-header::after {
-    content: '';
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-}
-.header-icon {
-    font-size: 2.8rem;
-    margin-bottom: 0.5rem;
-    display: block;
-    animation: pulse-icon 3s ease-in-out infinite;
-}
-@keyframes pulse-icon {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.06); }
-}
-.app-header h1 {
-    color: #ffffff !important;
-    font-size: 2.1rem !important;
-    font-weight: 900 !important;
-    margin: 0 0 0.5rem !important;
-    letter-spacing: -1px;
-    position: relative;
-    text-shadow: 0 2px 20px rgba(0,0,0,0.2);
-}
-.app-header p {
-    color: rgba(255,255,255,0.82) !important;
-    font-size: 0.95rem !important;
-    margin: 0 !important;
-    position: relative;
-    font-weight: 500;
-}
-
-/* ── Header Badges ── */
-.header-badges {
-    display: flex;
-    gap: 0.45rem;
-    justify-content: center;
-    margin-top: 1.25rem;
-    flex-wrap: wrap;
-}
-.badge {
-    background: rgba(255,255,255,0.15);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.25);
-    border-radius: 999px;
-    padding: 0.28rem 0.8rem;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    backdrop-filter: blur(8px);
-    transition: background 0.2s ease, transform 0.2s ease;
-}
-.badge:hover {
-    background: rgba(255,255,255,0.25);
-    transform: translateY(-1px);
-}
-
-/* ── Version Chip ── */
-.version-chip {
-    display: inline-block;
-    background: rgba(255,255,255,0.18);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.3);
-    border-radius: 999px;
-    padding: 0.18rem 0.65rem;
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.8px;
-    text-transform: uppercase;
-    margin-bottom: 0.75rem;
-}
-
-/* ── Buttons ── */
-.btn-primary {
-    background: linear-gradient(135deg, #2563eb, #4f46e5) !important;
-    color: #fff !important;
-    border: none !important;
-    border-radius: var(--radius) !important;
-    font-weight: 700 !important;
-    font-size: 1rem !important;
-    padding: 0.8rem 2rem !important;
-    cursor: pointer !important;
-    transition: all 0.22s cubic-bezier(0.4,0,0.2,1) !important;
-    box-shadow: 0 4px 20px rgba(37,99,235,0.4) !important;
-    letter-spacing: -0.2px;
-}
-.btn-primary:hover {
-    transform: translateY(-3px) !important;
-    box-shadow: 0 12px 35px rgba(37,99,235,0.5) !important;
-    background: linear-gradient(135deg, #1d4ed8, #4338ca) !important;
-}
-.btn-primary:active { transform: translateY(-1px) !important; }
-
-.btn-secondary {
-    background: var(--bg-surface) !important;
-    color: var(--text-secondary) !important;
-    border: 1.5px solid var(--card-border) !important;
-    border-radius: var(--radius) !important;
-    font-weight: 600 !important;
-    backdrop-filter: blur(8px) !important;
-    transition: all 0.2s ease !important;
-}
-.btn-secondary:hover {
-    border-color: var(--brand-blue) !important;
-    color: var(--brand-blue) !important;
-    transform: translateY(-1px) !important;
-}
-
-/* ── Input Textarea ── */
-.input-section textarea {
-    border: 1.5px solid var(--input-border) !important;
-    border-radius: var(--radius) !important;
-    font-size: 0.93rem !important;
-    transition: border-color 0.22s ease, box-shadow 0.22s ease !important;
-    background: var(--input-bg) !important;
-    color: var(--input-text) !important;
-    backdrop-filter: blur(8px) !important;
-}
-.input-section textarea:focus {
-    border-color: var(--brand-blue) !important;
-    box-shadow: 0 0 0 4px rgba(37,99,235,0.12) !important;
-}
-
-/* ── Section Labels ── */
-.section-label {
-    font-size: 0.68rem !important;
-    font-weight: 800 !important;
-    text-transform: uppercase !important;
-    letter-spacing: 1.2px !important;
-    color: var(--text-muted) !important;
-    margin-bottom: 0.6rem !important;
-}
-
-/* ── Sample Buttons ── */
-.sample-btn {
-    background: var(--bg-surface) !important;
-    border: 1.5px solid var(--card-border) !important;
-    border-radius: var(--radius-sm) !important;
-    color: var(--text-secondary) !important;
-    font-size: 0.8rem !important;
-    font-weight: 500 !important;
-    transition: all 0.2s ease !important;
-    text-align: left !important;
-    backdrop-filter: blur(8px) !important;
-}
-.sample-btn:hover {
-    border-color: var(--brand-blue) !important;
-    color: var(--brand-blue) !important;
-    background: rgba(37,99,235,0.06) !important;
-    transform: translateY(-2px) !important;
-    box-shadow: 0 4px 16px rgba(37,99,235,0.12) !important;
-}
-
-/* ── Article Row ── */
-.article-row {
-    padding: 0.75rem 0;
-    border-bottom: 1px solid var(--card-border);
-    transition: background 0.18s ease;
-    border-radius: 8px;
-    padding-left: 0.5rem;
-    padding-right: 0.5rem;
-}
-.article-row:last-child { border-bottom: none; }
-.article-row:hover { background: rgba(37,99,235,0.04); }
-
-/* ── Evidence Row Classification Colors ── */
-.class-supporting { color: var(--real-green); }
-.class-contradicting { color: var(--fake-red); }
-.class-neutral { color: var(--text-muted); }
-
-/* ── How It Works Steps ── */
-.step-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.65rem;
-    padding: 0.45rem 0;
-    font-size: 0.82rem;
-    color: var(--text-secondary);
-    line-height: 1.6;
-}
-.step-num {
-    flex-shrink: 0;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #2563eb, #4f46e5);
-    color: #fff;
-    font-size: 0.68rem;
-    font-weight: 800;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-top: 1px;
-}
-
-/* ── Team Card Grid ── */
-.team-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1rem;
-    margin: 1.2rem 0;
-}
-.team-card {
-    background: var(--bg-surface);
-    backdrop-filter: blur(12px);
-    border: 1px solid var(--card-border);
-    border-radius: var(--radius);
-    padding: 1.25rem 1rem;
-    text-align: center;
-    transition: transform 0.22s ease, box-shadow 0.22s ease;
-    position: relative;
-    overflow: hidden;
-}
-.team-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, #2563eb, #7c3aed);
-}
-.team-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 32px rgba(37,99,235,0.14);
-}
-.team-avatar {
-    width: 52px;
-    height: 52px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #2563eb, #7c3aed);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.3rem;
-    margin: 0 auto 0.75rem;
-    box-shadow: 0 4px 14px rgba(37,99,235,0.25);
-}
-.team-name {
-    font-size: 0.88rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin-bottom: 0.2rem;
-}
-.team-role {
-    font-size: 0.73rem;
-    color: var(--text-muted);
-    line-height: 1.45;
-}
-.team-role-badge {
-    display: inline-block;
-    margin-top: 0.5rem;
-    padding: 0.15rem 0.55rem;
-    border-radius: 999px;
-    font-size: 0.67rem;
-    font-weight: 700;
-    background: rgba(37,99,235,0.1);
-    color: var(--brand-blue);
-    letter-spacing: 0.3px;
-}
-
-/* ── Footer ── */
-.app-footer {
-    background: var(--card-bg);
-    backdrop-filter: var(--card-blur);
-    border: 1px solid var(--card-border);
-    border-radius: var(--radius-xl);
-    padding: 2rem 2.5rem;
-    text-align: center;
-    margin-top: 1.5rem;
-    position: relative;
-    overflow: hidden;
-}
-.app-footer::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, #2563eb, #4f46e5, #7c3aed, #0891b2);
-}
-.footer-inst {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0.5rem 0 0.2rem;
-}
-.footer-sub {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-}
-.footer-copyright {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    margin-top: 0.25rem;
-}
-
-/* ── Copy Result Box ── */
-.copy-result-box {
-    background: var(--input-bg) !important;
-    border: 1.5px solid var(--input-border) !important;
-    border-radius: var(--radius) !important;
-    color: var(--input-text) !important;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
-    font-size: 0.82rem !important;
-}
-
-/* ── Disclaimer Card ── */
-.disclaimer-card {
-    background: rgba(37,99,235,0.05);
-    border: 1px solid rgba(37,99,235,0.15);
-    border-radius: var(--radius);
-    padding: 0.9rem 1.2rem;
-    margin-top: 0.5rem;
-    display: flex;
-    align-items: flex-start;
-    gap: 0.6rem;
-}
-
-/* ── Animations ── */
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(20px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to   { opacity: 1; }
-}
-@keyframes slideInLeft {
-    from { opacity: 0; transform: translateX(-16px); }
-    to   { opacity: 1; transform: translateX(0); }
-}
-@keyframes shimmer {
-    0% { background-position: -200% center; }
-    100% { background-position: 200% center; }
-}
-
-.fade-in { animation: fadeInUp 0.45s cubic-bezier(0.4,0,0.2,1) forwards; }
-.fade-in > * { animation: fadeInUp 0.45s cubic-bezier(0.4,0,0.2,1) both; }
-.fade-in > *:nth-child(2) { animation-delay: 0.07s; }
-.fade-in > *:nth-child(3) { animation-delay: 0.14s; }
-.fade-in > *:nth-child(4) { animation-delay: 0.21s; }
-.fade-in > *:nth-child(5) { animation-delay: 0.28s; }
-.fade-in > *:nth-child(6) { animation-delay: 0.35s; }
-.fade-in > *:nth-child(7) { animation-delay: 0.42s; }
-
-@media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation: none !important; transition: none !important; }
-}
-
-/* ── Mobile Responsiveness ── */
-@media (max-width: 768px) {
-    .app-header { padding: 2rem 1rem 1.75rem; border-radius: var(--radius-lg); }
-    .app-header h1 { font-size: 1.45rem !important; letter-spacing: -0.5px; }
-    .app-header p { font-size: 0.85rem !important; }
-    .header-badges { gap: 0.35rem; }
-    .badge { font-size: 0.68rem; padding: 0.22rem 0.6rem; }
-    .result-card { padding: 1.1rem; border-radius: var(--radius-sm); }
-    .verdict-label-real, .verdict-label-fake, .verdict-label-unverified { font-size: 1.5rem !important; }
-    .team-grid { grid-template-columns: repeat(2, 1fr); gap: 0.75rem; }
-    .team-card { padding: 1rem 0.75rem; }
-    .app-footer { padding: 1.5rem 1.25rem; border-radius: var(--radius-lg); }
-    .btn-primary { font-size: 0.93rem !important; }
-}
-
-@media (max-width: 480px) {
-    .team-grid { grid-template-columns: 1fr 1fr; }
-    .header-badges { gap: 0.3rem; }
-    .badge { font-size: 0.65rem; }
-}
-"""
-
-# ── HTML Builders ──────────────────────────────────────────────────────────────
-
-def _verdict_icon(verdict: str) -> str:
-    return {"REAL": "✅", "FAKE": "❌", "UNVERIFIED": "⚠️"}.get(verdict, "❓")
+def _h(text: object) -> str:
+    """Escape for safe HTML injection."""
+    return html.escape(str(text))
 
 
-def _verdict_label(verdict: str) -> str:
-    return {"REAL": "REAL NEWS", "FAKE": "FAKE NEWS", "UNVERIFIED": "UNVERIFIED"}.get(
-        verdict, verdict
-    )
+# ══════════════════════════════════════════════════════════════════════════════
+# HTML RENDERERS
+# ══════════════════════════════════════════════════════════════════════════════
 
-
-def build_result_html(result: dict) -> str:
-    if result.get("error") and not result.get("verdict"):
-        return (
-            '<div class="result-card verdict-unverified fade-in">'
-            '<p style="color:#d97706;font-weight:700;font-size:1.1rem">⚠️ Error</p>'
-            f'<p style="color:var(--text-secondary)">{result["error"]}</p>'
-            "</div>"
-        )
-
-    verdict       = result.get("verdict",            "UNVERIFIED")
-    overall_conf  = result.get("overall_confidence", result.get("confidence", 0))
-    ml_conf_pct   = result.get("ml_confidence",      50)
-    ev_conf_pct   = result.get("evidence_confidence", 0)
-    icon          = _verdict_icon(verdict)
-    label         = _verdict_label(verdict)
-    reasoning     = result.get("reasoning",          [])
-    ml            = result.get("ml_result",          {})
-    ling          = result.get("linguistic_signals", {})
-    ev            = result.get("evidence_result",    {})
-    elapsed       = result.get("elapsed_seconds",    0)
-    primary_claim = result.get("primary_claim",      "")
-    url_meta      = result.get("url_meta",           {})
-    vclass        = verdict.lower()
-
-    ov_bar_class = (
-        "ov-color" if verdict == "REAL" else
-        "ov-fake"  if verdict == "FAKE" else
-        "ov-unv"
-    )
-    overall_bar = f"""
-    <div class="conf-bar-wrap">
-        <div class="conf-bar {vclass}" style="width:{overall_conf}%"></div>
+def _render_empty_state() -> str:
+    return """
+    <div class="fnd-empty">
+      <span class="fnd-empty-icon">🔍</span>
+      <h3>Ready to verify</h3>
+      <p>Enter a news headline, article text, or paste a news URL above, then click
+         <strong>Verify News</strong> to start the analysis.</p>
     </div>
-    <p style="font-size:0.8rem;color:var(--text-secondary);margin:0.2rem 0 0">
-        Overall Confidence: <strong>{overall_conf}%</strong>
-    </p>"""
+    """
 
-    reasoning_html = "".join(
-        f'<li style="margin-bottom:0.4rem;color:var(--text-secondary);font-size:0.9rem">'
-        f'<span style="color:var(--brand-blue)">▸</span> {r}</li>'
-        for r in reasoning
-    )
 
-    claim_html = ""
-    if primary_claim:
-        claim_html = f"""
-    <div class="result-card" style="margin-bottom:0.75rem;background:rgba(26,86,219,0.04);
-         border-color:rgba(26,86,219,0.2)">
-        <p class="section-label">🎯 Extracted Primary Claim</p>
-        <p style="font-size:0.88rem;color:var(--text-primary);margin:0;font-style:italic">
-            "{primary_claim[:200]}"
-        </p>
-    </div>"""
-
-    url_html = ""
-    if url_meta.get("is_url"):
-        url_html = f"""
-    <div class="result-card" style="margin-bottom:0.75rem">
-        <p class="section-label">🔗 Source Article</p>
-        <p style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin:0">
-            {url_meta.get('article_title','') or 'Article'}</p>
-        <p style="font-size:0.75rem;color:var(--text-secondary);margin:0.2rem 0 0">
-            {url_meta.get('domain','')}
-            {' · ' + url_meta.get('article_date','') if url_meta.get('article_date') else ''}
-        </p>
-    </div>"""
-
-    conf_breakdown = f"""
-    <div class="result-card" style="margin-top:1rem">
-        <p class="section-label">📊 Confidence Breakdown</p>
-        <div style="display:grid;gap:0.75rem">
-            <div>
-                <div style="display:flex;justify-content:space-between;font-size:0.82rem">
-                    <span style="color:var(--text-secondary)">🤖 ML Confidence</span>
-                    <strong style="color:#4338ca">{ml_conf_pct}%</strong>
-                </div>
-                <div class="mini-bar-wrap">
-                    <div class="mini-bar ml-color" style="width:{ml_conf_pct}%"></div>
-                </div>
-            </div>
-            <div>
-                <div style="display:flex;justify-content:space-between;font-size:0.82rem">
-                    <span style="color:var(--text-secondary)">🌐 Evidence Confidence</span>
-                    <strong style="color:#0891b2">{ev_conf_pct}%</strong>
-                </div>
-                <div class="mini-bar-wrap">
-                    <div class="mini-bar ev-color" style="width:{ev_conf_pct}%"></div>
-                </div>
-            </div>
-            <div>
-                <div style="display:flex;justify-content:space-between;font-size:0.82rem">
-                    <span style="color:var(--text-secondary)">⚖️ Overall Confidence</span>
-                    <strong>{overall_conf}%</strong>
-                </div>
-                <div class="mini-bar-wrap">
-                    <div class="mini-bar {ov_bar_class}" style="width:{overall_conf}%"></div>
-                </div>
-            </div>
+def _render_loading() -> str:
+    return """
+    <div class="fnd-loading active" id="fnd-loading-indicator">
+      <div class="fnd-spinner"></div>
+      <div class="fnd-loading-label">Analysing…</div>
+      <div class="fnd-loading-sub">Running ML model + live web verification</div>
+      <div class="fnd-steps">
+        <div class="fnd-step done">
+          <span class="fnd-step-dot"></span> Input validated
         </div>
-    </div>"""
-
-    prob_real  = int(ml.get("prob_real", 0.5) * 100)
-    prob_fake  = int(ml.get("prob_fake", 0.5) * 100)
-    model_name = ml.get("model_name", "ML Model")
-    ml_html = f"""
-    <div class="result-card" style="margin-top:1rem">
-        <p class="section-label">🤖 ML Model Analysis</p>
-        <p style="font-size:0.75rem;color:var(--text-secondary);margin:0 0 0.5rem">
-            Model: <strong style="color:var(--brand-blue)">{model_name}</strong>
-        </p>
-        <div style="display:flex;gap:1.5rem;flex-wrap:wrap">
-            <div>
-                <p style="font-size:0.8rem;color:var(--text-secondary);margin:0">ML Prediction</p>
-                <p style="font-weight:700;color:{'var(--real-green)' if ml.get('label')=='REAL' else 'var(--fake-red)'};margin:0;font-size:1rem">
-                    {_verdict_icon(ml.get('label','UNVERIFIED'))} {ml.get('label','—')}
-                </p>
-            </div>
-            <div>
-                <p style="font-size:0.8rem;color:var(--text-secondary);margin:0">P(Real)</p>
-                <p style="font-weight:700;color:var(--real-green);margin:0">{prob_real}%</p>
-            </div>
-            <div>
-                <p style="font-size:0.8rem;color:var(--text-secondary);margin:0">P(Fake)</p>
-                <p style="font-weight:700;color:var(--fake-red);margin:0">{prob_fake}%</p>
-            </div>
-            <div>
-                <p style="font-size:0.8rem;color:var(--text-secondary);margin:0">Fake Signals</p>
-                <p style="font-weight:700;margin:0">{ling.get('fake_signal_count', 0)}</p>
-            </div>
-            <div>
-                <p style="font-size:0.8rem;color:var(--text-secondary);margin:0">Real Signals</p>
-                <p style="font-weight:700;margin:0">{ling.get('real_signal_count', 0)}</p>
-            </div>
+        <div class="fnd-step done">
+          <span class="fnd-step-dot"></span> ML prediction
         </div>
-    </div>"""
+        <div class="fnd-step active">
+          <span class="fnd-step-dot"></span> Live web search
+        </div>
+        <div class="fnd-step">
+          <span class="fnd-step-dot"></span> Evidence analysis
+        </div>
+        <div class="fnd-step">
+          <span class="fnd-step-dot"></span> Final verdict
+        </div>
+      </div>
+    </div>
+    """
 
-    supporting    = ev.get("supporting_sources",    [])
-    contradicting = ev.get("contradicting_sources", [])
-    neutral       = ev.get("neutral_sources",       [])
-    sources_found = ev.get("sources_found",         0)
-    avg_trust     = ev.get("avg_trust_score",        0)
 
-    sup_pills = "".join(f'<span class="source-pill real">✅ {s}</span>' for s in supporting)
-    con_pills = "".join(f'<span class="source-pill fake">❌ {s}</span>' for s in contradicting)
-    neu_pills = "".join(f'<span class="source-pill">⚪ {s}</span>'     for s in neutral)
+def _confidence_bar(label: str, pct: int, cls: str, icon: str = "") -> str:
+    safe_pct = max(0, min(100, pct))
+    return f"""
+    <div class="fnd-conf-row">
+      <div class="fnd-conf-header">
+        <span class="fnd-conf-label">{icon} {_h(label)}</span>
+        <span class="fnd-conf-pct">{safe_pct}%</span>
+      </div>
+      <div class="fnd-conf-track">
+        <div class="fnd-conf-fill {cls}"
+             style="--target-width:{safe_pct}%;width:{safe_pct}%"></div>
+      </div>
+    </div>
+    """
 
-    trust_badge = (
-        f'<span class="source-pill" style="background:rgba(124,58,237,0.1);'
-        f'color:#7c3aed;border-color:rgba(124,58,237,0.25)">'
-        f'🏅 Avg Trust: {avg_trust}/100</span>'
-        if avg_trust > 0 else ""
+
+def _render_verdict(result: dict) -> str:
+    verdict  = result.get("verdict", "UNVERIFIED")
+    overall  = result.get("overall_confidence", 0)
+    ml_conf  = result.get("ml_confidence",      0)
+    ev_conf  = result.get("evidence_confidence", 0)
+    elapsed  = result.get("elapsed_seconds",     0)
+    model    = _h(result.get("ml_result", {}).get("model_name", "—"))
+    sources  = result.get("evidence_result", {}).get("sources_found", 0)
+    url_meta = result.get("url_meta", {})
+
+    VERDICT_CONFIG = {
+        "REAL": {
+            "icon":   "✅",
+            "label":  "REAL",
+            "sub":    "This news appears credible based on ML analysis and trusted sources.",
+            "cls":    "fnd-verdict-real",
+            "bar_cls": "real",
+        },
+        "FAKE": {
+            "icon":   "❌",
+            "label":  "FAKE",
+            "sub":    "This content shows strong indicators of misinformation.",
+            "cls":    "fnd-verdict-fake",
+            "bar_cls": "fake",
+        },
+        "UNVERIFIED": {
+            "icon":   "⚠️",
+            "label":  "UNVERIFIED",
+            "sub":    "Insufficient evidence for a definitive verdict. Verify manually.",
+            "cls":    "fnd-verdict-unv",
+            "bar_cls": "unv",
+        },
+    }
+    cfg = VERDICT_CONFIG.get(verdict, VERDICT_CONFIG["UNVERIFIED"])
+
+    # URL banner
+    url_banner = ""
+    if url_meta.get("is_url") and url_meta.get("fetch_success"):
+        domain = _h(url_meta.get("domain", ""))
+        title  = _h(url_meta.get("article_title", "")[:80])
+        date   = _h(url_meta.get("article_date", ""))
+        url_banner = f"""
+        <div class="fnd-url-banner">
+          🌐 Analysed from URL &nbsp;·&nbsp;
+          <span class="fnd-url-domain">{domain}</span>
+          {f'&nbsp;·&nbsp; {title}' if title else ''}
+          {f'&nbsp;·&nbsp; <em>{date}</em>' if date else ''}
+        </div>
+        """
+
+    # Confidence bars
+    bars = (
+        _confidence_bar("Overall Confidence", overall, cfg["bar_cls"],      "🎯")
+        + _confidence_bar(f"ML Model [{model}]", ml_conf, cfg["bar_cls"],   "🤖")
+        + _confidence_bar(f"Evidence [{sources} source(s)]", ev_conf, cfg["bar_cls"], "📡")
     )
 
-    search_status = (
-        f'<p style="color:var(--text-secondary);font-size:0.85rem">'
-        f'🔍 Searched {ev.get("total_results",0)} results — '
-        f'{sources_found} from trusted sources. {trust_badge}</p>'
-        if sources_found > 0 else
-        '<p style="color:var(--unverified-amber);font-size:0.85rem">'
-        '⚠️ Live search returned no results from trusted sources. '
-        'Verdict based on ML model and linguistic analysis only.</p>'
-    )
-
-    evidence_html = f"""
-    <div class="result-card" style="margin-top:1rem">
-        <p class="section-label">🌐 Live Verification Evidence</p>
-        {search_status}
-        {f'<p style="font-size:0.8rem;margin:0.5rem 0 0.2rem;font-weight:600;color:var(--real-green)">Supporting Sources:</p>{sup_pills}' if supporting else ''}
-        {f'<p style="font-size:0.8rem;margin:0.5rem 0 0.2rem;font-weight:600;color:var(--fake-red)">Contradicting Sources:</p>{con_pills}' if contradicting else ''}
-        {f'<p style="font-size:0.8rem;margin:0.5rem 0 0.2rem;font-weight:600;color:var(--text-secondary)">Neutral References:</p>{neu_pills}' if neutral else ''}
-    </div>"""
-
-    articles = ev.get("articles", [])
-    if articles:
-        def _class_style(c):
-            if c == 'supporting':    return 'color:var(--real-green);background:var(--real-green-light)'
-            if c == 'contradicting': return 'color:var(--fake-red);background:var(--fake-red-light)'
-            return 'color:var(--text-muted);background:rgba(148,163,184,0.12)'
-
-        def _class_icon(c):
-            return '✅' if c=='supporting' else ('❌' if c=='contradicting' else '⚪')
-
-        article_rows = "".join(
-            f"""<div class="article-row">
-                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.5rem;flex-wrap:wrap">
-                    <a href="{a.get('url','#')}" target="_blank"
-                       style="font-weight:600;font-size:0.85rem;color:var(--brand-blue);text-decoration:none;
-                              flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;
-                              -webkit-box-orient:vertical;overflow:hidden;line-height:1.4">
-                       {a.get('title','')[:110]}
-                    </a>
-                    <span style="flex-shrink:0;font-size:0.68rem;font-weight:700;padding:0.18rem 0.55rem;
-                                 border-radius:999px;{_class_style(a.get('classification','neutral'))}">
-                        {_class_icon(a.get('classification','neutral'))} {a.get('classification','neutral').title()}
-                    </span>
-                </div>
-                <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.3rem;flex-wrap:wrap">
-                    <span style="font-size:0.73rem;font-weight:600;color:var(--text-secondary)">
-                        {a.get('source_name','')}
-                    </span>
-                    <span style="font-size:0.68rem;color:var(--text-muted)">·</span>
-                    <span style="font-size:0.72rem;color:#7c3aed;font-weight:600;
-                                 background:rgba(124,58,237,0.1);padding:0.1rem 0.4rem;border-radius:4px">
-                        🏅 {a.get('trust_score','—')}/100
-                    </span>
-                    {f'<span style="font-size:0.68rem;color:var(--text-muted)">· {a.get("date","")[:16]}</span>' if a.get('date') else ''}
-                </div>
-            </div>"""
-            for a in articles[:6]
-        )
-        articles_html = f"""
-        <div class="result-card" style="margin-top:1rem">
-            <p class="section-label">📰 Referenced Articles</p>
-            {article_rows}
-        </div>"""
-    else:
-        articles_html = ""
-
-    keywords = result.get("keywords", [])
-    kw_pills = "".join(f'<span class="source-pill">{k}</span>' for k in keywords[:8])
+    meta_line = f"""
+    <div style="font-size:0.78rem;color:var(--text-muted);margin-top:var(--space-3);
+                display:flex;gap:1rem;flex-wrap:wrap;">
+      <span>⏱ {elapsed}s</span>
+      <span>🤖 {model}</span>
+      <span>📰 {sources} source(s) found</span>
+    </div>
+    """
 
     return f"""
-    <div class="fade-in">
-        {url_html}
-        {claim_html}
-        <div class="result-card verdict-{vclass}">
-            <p class="section-label">VERDICT</p>
-            <p class="verdict-label-{vclass}" style="margin:0 0 0.25rem">{icon} {label}</p>
-            {overall_bar}
-            <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
-            <p class="section-label">AI REASONING</p>
-            <ul style="margin:0;padding-left:0;list-style:none">
-                {reasoning_html}
-            </ul>
+    {url_banner}
+    <div class="fnd-card {cfg['cls']}">
+      <span class="fnd-verdict-icon">{cfg['icon']}</span>
+      <div class="fnd-verdict-label {cfg['bar_cls']}">{cfg['label']}</div>
+      <div class="fnd-verdict-sub">{cfg['sub']}</div>
+      <div class="fnd-conf-block">{bars}</div>
+      {meta_line}
+    </div>
+    """
+
+
+def _render_reasoning(result: dict) -> str:
+    reasons = result.get("reasoning", [])
+    if not reasons:
+        return "<p style='color:var(--text-muted);font-size:0.88rem;'>No reasoning available.</p>"
+
+    items = "\n".join(
+        f"<li>{_h(r)}</li>"
+        for r in reasons
+    )
+    return f"""
+    <div class="fnd-card">
+      <div class="fnd-card-title">💡 AI Reasoning</div>
+      <ul class="fnd-reasoning">{items}</ul>
+    </div>
+    """
+
+
+def _render_keywords(result: dict) -> str:
+    kws = result.get("keywords", [])
+    if not kws:
+        return ""
+    badges = "".join(f'<span class="fnd-kw">{_h(k)}</span>' for k in kws)
+    return f"""
+    <div class="fnd-card" style="margin-top:var(--space-4);">
+      <div class="fnd-card-title">🔑 Detected Keywords</div>
+      <div class="fnd-kw-wrap">{badges}</div>
+    </div>
+    """
+
+
+def _render_sources(result: dict) -> str:
+    ev        = result.get("evidence_result", {})
+    articles  = ev.get("articles", [])
+    s_found   = ev.get("sources_found", 0)
+
+    if not articles:
+        search_err = ev.get("search_error", "")
+        return f"""
+        <div class="fnd-empty">
+          <span class="fnd-empty-icon">📡</span>
+          <h3>No trusted sources found</h3>
+          <p>{"Search error: " + _h(search_err) if search_err else
+             "No results matched our trusted source whitelist. "
+             "The verdict relies on ML model and linguistic analysis."}</p>
         </div>
-        {conf_breakdown}
-        {ml_html}
-        {evidence_html}
-        {articles_html}
-        <div class="result-card" style="margin-top:1rem">
-            <p class="section-label">🔑 Extracted Keywords</p>
-            <div style="margin-bottom:0.75rem">
-                {kw_pills if kw_pills else '<span style="color:var(--text-secondary);font-size:0.85rem">None extracted</span>'}
-            </div>
-            <p style="font-size:0.75rem;color:var(--text-secondary);margin:0">
-                ⏱ Verification completed in {elapsed}s
-            </p>
-        </div>
-    </div>"""
+        """
 
+    cards = []
+    for a in articles:
+        cls_raw = a.get("classification", "neutral")
+        cls_map = {"supporting": "supporting", "contradicting": "contradicting"}
+        cls     = cls_map.get(cls_raw, "neutral")
+        name    = _h(a.get("source_name", a.get("domain", "Source")))
+        trust   = int(a.get("trust_score", 0))
+        title   = _h(a.get("title",   "")[:140])
+        snippet = _h(a.get("snippet", "")[:200])
+        url     = _h(a.get("url",     ""))
+        date    = _h(a.get("date",    ""))
+        is_fc   = a.get("is_fact_check", False)
 
-# ── Gradio Interface Functions ─────────────────────────────────────────────────
+        # Classification badge
+        badge_map = {
+            "supporting":    ('<span class="fnd-badge fnd-badge-sup">✅ Supporting</span>', "Supporting"),
+            "contradicting": ('<span class="fnd-badge fnd-badge-con">❌ Contradicts</span>', "Contradicts"),
+        }
+        cls_badge, _ = badge_map.get(cls, ('<span class="fnd-badge fnd-badge-neu">⚠️ Neutral</span>', "Neutral"))
 
-def run_check(news_input: str) -> tuple[str, str]:
-    if not news_input or not news_input.strip():
-        return (
-            '<div class="result-card verdict-unverified">'
-            '<p style="color:#d97706;font-weight:700">⚠️ Please enter news text or a URL first.</p></div>',
-            "",
+        fc_badge = '<span class="fnd-badge fnd-badge-fc">✓ Fact-Check</span>' if is_fc else ""
+
+        # Trust score styling
+        trust_cls = "trust-high" if trust >= 90 else ("trust-mid" if trust >= 70 else "trust-low")
+        trust_html = f"""
+        <span class="fnd-trust-score {trust_cls}">
+          <span class="fnd-trust-dot"></span> {trust}/100
+        </span>
+        """
+
+        snippet_html = (
+            f'<div class="fnd-source-snippet">{snippet}…</div>' if snippet else ""
+        )
+        date_html = (
+            f'<span class="fnd-source-date">📅 {date}</span>' if date else ""
         )
 
-    result   = check_news(news_input)
-    html_out = build_result_html(result)
-
-    verdict   = result.get("verdict",            "UNVERIFIED")
-    ov_conf   = result.get("overall_confidence", result.get("confidence", 0))
-    ml_conf   = result.get("ml_confidence",      50)
-    ev_conf   = result.get("evidence_confidence", 0)
-    reasoning = "\n".join(f"  • {r}" for r in result.get("reasoning", []))
-    ev_sources= result.get("evidence_result", {}).get("sources_found", 0)
-    model_name= result.get("ml_result", {}).get("model_name", "ML Model")
-
-    summary = (
-        f"╔══════════════════════════════════════════════╗\n"
-        f"║   AI FAKE NEWS DETECTION — VERSION 3        ║\n"
-        f"║   Government Polytechnic West Champaran     ║\n"
-        f"╚══════════════════════════════════════════════╝\n\n"
-        f"VERDICT          : {'✅ REAL NEWS' if verdict=='REAL' else '❌ FAKE NEWS' if verdict=='FAKE' else '⚠️  UNVERIFIED'}\n"
-        f"Overall Confidence : {ov_conf}%\n"
-        f"─────────────────────────────────────────────\n"
-        f"ML Model         : {model_name}\n"
-        f"ML Confidence    : {ml_conf}%\n"
-        f"ML Prediction    : {result.get('ml_result',{}).get('label','—')}\n"
-        f"Evidence Conf.   : {ev_conf}%\n"
-        f"Sources Found    : {ev_sources}\n"
-        f"─────────────────────────────────────────────\n"
-        f"AI REASONING:\n"
-        f"{reasoning}\n"
-        f"─────────────────────────────────────────────\n"
-        f"Verified In      : {result.get('elapsed_seconds',0)}s\n"
-        f"Generated By     : AI Fake News Detector V3\n"
-        f"Institution      : Govt. Polytechnic West Champaran\n"
-        f"Internship 2026  : AI & ML Batch — SBTE Bihar\n"
-    )
-    return html_out, summary
-
-
-def load_sample(sample_key: str) -> str:
-    return SAMPLE_NEWS.get(sample_key, "")
-
-
-def clear_all() -> tuple[str, str, str]:
-    return "", "", ""
-
-
-# ── App Layout ─────────────────────────────────────────────────────────────────
-
-def create_app() -> gr.Blocks:
-    with gr.Blocks(
-        title="AI Fake News Detector V3",
-        css=CUSTOM_CSS,
-        theme=gr.themes.Soft(
-            primary_hue="blue",
-            secondary_hue="indigo",
-            neutral_hue="slate",
-        ),
-        fill_height=False,
-    ) as demo:
-
-        gr.HTML("""
-        <div class="app-header">
-            <span class="header-icon">🔍</span>
-            <div class="version-chip">VERSION 3 · 2026</div>
-            <h1>AI Fake News Detection &amp; Live Verification</h1>
-            <p>Multi-source verification · Machine Learning · Evidence-based analysis</p>
-            <div class="header-badges">
-                <span class="badge">🤖 Multi-Model ML</span>
-                <span class="badge">🌐 Live Search</span>
-                <span class="badge">📰 Trusted Sources</span>
-                <span class="badge">🔗 URL Support</span>
-                <span class="badge">🏅 Trust Scores</span>
-                <span class="badge">🔒 100% Free</span>
+        cards.append(f"""
+        <div class="fnd-source-card {cls}">
+          <div class="fnd-source-header">
+            <div class="fnd-source-name">{name}</div>
+            <div class="fnd-source-badges">
+              {cls_badge}{fc_badge}{trust_html}
             </div>
+          </div>
+          <div class="fnd-source-title">{title}</div>
+          {snippet_html}
+          <div class="fnd-source-meta">
+            <a class="fnd-source-link" href="{url}" target="_blank"
+               rel="noopener noreferrer">🔗 View article</a>
+            {date_html}
+          </div>
         </div>
         """)
 
-        with gr.Row():
-            with gr.Column(scale=1, elem_classes=["input-section"]):
+    summary_badges = []
+    sup_n = len([a for a in articles if a.get("classification") == "supporting"])
+    con_n = len([a for a in articles if a.get("classification") == "contradicting"])
+    neu_n = s_found - sup_n - con_n
+    if sup_n: summary_badges.append(f'<span class="fnd-badge fnd-badge-sup">✅ {sup_n} Supporting</span>')
+    if con_n: summary_badges.append(f'<span class="fnd-badge fnd-badge-con">❌ {con_n} Contradicting</span>')
+    if neu_n: summary_badges.append(f'<span class="fnd-badge fnd-badge-neu">⚠️ {neu_n} Neutral</span>')
 
-                gr.HTML('<p class="section-label">📋 Enter News Text or Paste a News Article URL</p>')
-                news_input = gr.Textbox(
-                    label="",
-                    placeholder=(
-                        "Paste a news headline, article text, or a news article URL …\n\n"
-                        "Examples:\n"
-                        "• ISRO successfully tests reusable launch vehicle …\n"
-                        "• https://www.thehindu.com/news/…"
-                    ),
-                    lines=8,
-                    max_lines=20,
-                    show_copy_button=True,
-                )
+    return f"""
+    <div class="fnd-card-title" style="margin-bottom:var(--space-3);">
+      📡 Evidence from {s_found} Trusted Source(s)
+      &nbsp; {'&nbsp;'.join(summary_badges)}
+    </div>
+    {''.join(cards)}
+    """
 
+
+def _render_copy_report(result: dict) -> str:
+    text = format_report_text(result, result.get("original_text", ""))
+    safe = _h(text)
+    return f"""
+    <div class="fnd-card">
+      <div class="fnd-card-title">📋 Formatted Report</div>
+      <pre style="font-family:var(--font-mono);font-size:0.78rem;
+                  color:var(--text-secondary);white-space:pre-wrap;
+                  word-break:break-word;
+                  background:var(--bg-code);padding:var(--space-4);
+                  border-radius:var(--radius-md);max-height:400px;overflow-y:auto;
+                  border:1px solid var(--border-subtle);">{safe}</pre>
+    </div>
+    """
+
+
+def _hero_html() -> str:
+    return f"""
+    <div class="fnd-hero">
+      <div class="fnd-hero-badge">🔍 AI-Powered · Free · No Paid APIs</div>
+      <h1>AI Fake News Detection<br>&amp; Live Verification System</h1>
+      <p>Multi-source evidence gathering · Machine learning classification ·
+         Trust-weighted scoring · Real-time web verification</p>
+      <div class="fnd-hero-pills">
+        <span class="fnd-hero-pill">🤖 ML Classifier</span>
+        <span class="fnd-hero-pill">📡 Live Web Search</span>
+        <span class="fnd-hero-pill">✅ 40+ Trusted Sources</span>
+        <span class="fnd-hero-pill">🌐 URL Mode</span>
+        <span class="fnd-hero-pill">📊 Confidence Scoring</span>
+        <span class="fnd-hero-pill">📥 Export Reports</span>
+      </div>
+    </div>
+    """
+
+
+def _footer_html() -> str:
+    team_cards = ""
+    for dev in DEVELOPERS:
+        team_cards += f"""
+        <div class="fnd-team-card">
+          <div class="fnd-avatar">{_h(dev['avatar'])}</div>
+          <div class="fnd-team-name">{_h(dev['name'])}</div>
+          <div class="fnd-team-role">{_h(dev['role'])}</div>
+          <span class="fnd-team-badge">{_h(dev['badge'])}</span>
+        </div>
+        """
+
+    return f"""
+    <div class="fnd-footer">
+      <span class="fnd-footer-logo">🔍 FakeNewsDetect</span>
+      <h2>Meet the Team</h2>
+      <p class="fnd-footer-sub">{_h(INSTITUTION)} · AI &amp; ML Internship 2026</p>
+      <div class="fnd-team-grid">{team_cards}</div>
+      <div class="fnd-footer-pills">
+        <span class="fnd-footer-pill">🏛 {_h(INSTITUTION)}</span>
+        <span class="fnd-footer-pill">🎓 SBTE Bihar · Diploma Engineering</span>
+        <span class="fnd-footer-pill">📅 Session 2025–2028</span>
+        <span class="fnd-footer-pill">🚀 Version {_h(APP_VERSION)}</span>
+        <span class="fnd-footer-pill">📜 MIT License</span>
+        <span class="fnd-footer-pill">✅ 100% Free APIs</span>
+      </div>
+      <div class="fnd-footer-bottom">
+        <div class="fnd-footer-info">
+          Department of Computer Science &amp; Engineering ·
+          AI &amp; ML Internship 2026<br>
+          &copy; 2026 All rights reserved ·
+          For educational and research purposes only
+        </div>
+      </div>
+    </div>
+    """
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN CHECK FUNCTION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_check(
+    news_input: str,
+    history_state: VerificationHistory,
+) -> tuple:
+    """
+    Main Gradio event handler.
+    Returns: (verdict_html, reasoning_html, sources_html, keywords_html,
+              copy_html, history_html, stats_html,
+              pdf_path, txt_path, json_path,
+              history_state)
+    """
+    # Input validation
+    if not news_input or not news_input.strip():
+        err = '<div class="fnd-error">⚠️ Please enter a news headline, article text, or URL.</div>'
+        empty = _render_empty_state()
+        return (err, empty, empty, empty, empty,
+                history_state.render_history_html(),
+                history_state.render_stats_html(),
+                None, None, None, history_state)
+
+    logger.info("run_check — input length: %d", len(news_input))
+
+    try:
+        result = check_news(news_input)
+    except Exception as exc:
+        logger.exception("check_news raised: %s", exc)
+        err_html = f'<div class="fnd-error">❌ Analysis error: {_h(str(exc))}</div>'
+        empty    = _render_empty_state()
+        return (err_html, empty, empty, empty, empty,
+                history_state.render_history_html(),
+                history_state.render_stats_html(),
+                None, None, None, history_state)
+
+    # Error from pipeline
+    if result.get("error"):
+        err_html = f'<div class="fnd-error">⚠️ {_h(result["error"])}</div>'
+        empty    = _render_empty_state()
+        return (err_html, empty, empty, empty, empty,
+                history_state.render_history_html(),
+                history_state.render_stats_html(),
+                None, None, None, history_state)
+
+    # Render output sections
+    verdict_html   = _render_verdict(result)
+    reasoning_html = _render_reasoning(result)
+    sources_html   = _render_sources(result)
+    keywords_html  = _render_keywords(result)
+    copy_html      = _render_copy_report(result)
+
+    # Add to session history
+    history_state.add(result, news_input)
+
+    # Generate export files
+    pdf_path  = None
+    txt_path  = None
+    json_path = None
+    try:
+        txt_path  = export_txt(result, news_input)
+        json_path = export_json(result, news_input)
+        pdf_path  = export_pdf(result, news_input)
+    except Exception as exc:
+        logger.warning("Export generation failed: %s", exc)
+
+    return (
+        verdict_html,
+        reasoning_html,
+        sources_html,
+        keywords_html,
+        copy_html,
+        history_state.render_history_html(),
+        history_state.render_stats_html(),
+        pdf_path,
+        txt_path,
+        json_path,
+        history_state,
+    )
+
+
+def load_sample(sample_label: str) -> str:
+    return SAMPLE_NEWS.get(sample_label, "")
+
+
+def clear_history_fn(history_state: VerificationHistory) -> tuple:
+    history_state.clear()
+    return (
+        history_state.render_history_html(),
+        history_state.render_stats_html(),
+        history_state,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GRADIO LAYOUT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def build_ui() -> gr.Blocks:
+    with gr.Blocks(
+        title=f"{APP_TITLE} v{APP_VERSION}",
+        css=CSS,
+        theme=gr.themes.Base(
+            font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+        ),
+    ) as demo:
+
+        # ── Theme toggle JS ───────────────────────────────────────────────────
+        gr.HTML(f"""
+        <script>
+          {THEME_JS}
+          document.addEventListener('DOMContentLoaded', initTheme);
+        </script>
+        """)
+
+        # Session history state (one per browser session)
+        history_state = gr.State(VerificationHistory)
+
+        # ── Theme toggle bar ──────────────────────────────────────────────────
+        gr.HTML("""
+        <div class="fnd-theme-bar">
+          <button class="fnd-theme-toggle"
+                  id="fnd-theme-btn"
+                  onclick="toggleTheme()"
+                  title="Toggle dark / light mode">
+            🌙 Dark Mode
+          </button>
+        </div>
+        """)
+
+        # ── Hero ──────────────────────────────────────────────────────────────
+        gr.HTML(_hero_html())
+
+        # ════════════════════════════════════════════════════════════════════
+        # MAIN TABS
+        # ════════════════════════════════════════════════════════════════════
+        with gr.Tabs():
+
+            # ── TAB 1: VERIFY ─────────────────────────────────────────────
+            with gr.TabItem("🔍 Verify News", id="verify"):
+                with gr.Row(equal_height=False):
+
+                    # ── LEFT COLUMN — Input ───────────────────────────────
+                    with gr.Column(scale=5, min_width=300, elem_classes=["fnd-input-wrap"]):
+                        gr.HTML('<div class="fnd-card-title">📝 Enter News to Verify</div>')
+
+                        news_input = gr.Textbox(
+                            label="News Headline / Article Text / URL",
+                            placeholder=(
+                                "Paste a news headline, article text, or a URL "
+                                "(e.g. https://www.thehindu.com/...)"
+                            ),
+                            lines=6,
+                            max_lines=20,
+                            show_copy_button=True,
+                            elem_classes=["fnd-input-wrap"],
+                        )
+
+                        sample_dropdown = gr.Dropdown(
+                            label="Try a sample",
+                            choices=list(SAMPLE_NEWS.keys()),
+                            value=None,
+                            interactive=True,
+                            elem_classes=["fnd-sample"],
+                            info="Select a sample to auto-fill the input",
+                        )
+
+                        with gr.Row():
+                            verify_btn = gr.Button(
+                                "🔍 Verify News",
+                                variant="primary",
+                                size="lg",
+                                elem_classes=["fnd-btn-primary"],
+                            )
+                            clear_btn = gr.ClearButton(
+                                components=[news_input],
+                                value="🗑 Clear",
+                                size="sm",
+                                elem_classes=["fnd-btn-secondary"],
+                            )
+
+                        gr.HTML("""
+                        <div class="fnd-disclaimer">
+                          ⚠️ <strong>Disclaimer:</strong> This tool is for educational and
+                          research purposes only. Always cross-reference with authoritative
+                          sources. Never use as the sole basis for any decision.
+                        </div>
+                        """)
+
+                    # ── RIGHT COLUMN — Results ────────────────────────────
+                    with gr.Column(scale=7, min_width=320):
+                        with gr.Tabs():
+
+                            # VERDICT tab
+                            with gr.TabItem("🎯 Verdict"):
+                                verdict_html = gr.HTML(value=_render_empty_state())
+
+                            # REASONING tab
+                            with gr.TabItem("💡 Reasoning"):
+                                reasoning_html = gr.HTML(value=_render_empty_state())
+
+                            # SOURCES tab
+                            with gr.TabItem("📡 Sources"):
+                                sources_html = gr.HTML(value=_render_empty_state())
+
+                            # KEYWORDS tab
+                            with gr.TabItem("🔑 Keywords"):
+                                keywords_html = gr.HTML(value=_render_empty_state())
+
+                            # REPORT tab
+                            with gr.TabItem("📋 Report"):
+                                copy_html = gr.HTML(value=_render_empty_state())
+
+                            # EXPORT tab
+                            with gr.TabItem("📥 Export"):
+                                gr.HTML("""
+                                <div class="fnd-card" style="margin-bottom:var(--space-4);">
+                                  <div class="fnd-card-title">📥 Download Verification Report</div>
+                                  <p style="font-size:0.85rem;color:var(--text-secondary);
+                                            margin-bottom:var(--space-4);">
+                                    Run a verification first, then download the report
+                                    in your preferred format.
+                                  </p>
+                                </div>
+                                """)
+                                with gr.Row():
+                                    pdf_download  = gr.File(
+                                        label="📄 PDF Report",
+                                        interactive=False,
+                                        visible=True,
+                                    )
+                                    txt_download  = gr.File(
+                                        label="📝 Text Report",
+                                        interactive=False,
+                                        visible=True,
+                                    )
+                                    json_download = gr.File(
+                                        label="🗂 JSON Report",
+                                        interactive=False,
+                                        visible=True,
+                                    )
+
+            # ── TAB 2: HISTORY ────────────────────────────────────────────
+            with gr.TabItem("📋 History", id="history"):
                 with gr.Row():
-                    detect_btn = gr.Button(
-                        "🔍 Detect & Verify",
-                        variant="primary",
-                        elem_classes=["btn-primary"],
-                        scale=3,
-                    )
-                    clear_btn = gr.Button(
-                        "🗑 Clear",
-                        variant="secondary",
-                        elem_classes=["btn-secondary"],
-                        scale=1,
-                    )
+                    with gr.Column():
+                        gr.HTML('<div class="fnd-card-title">📋 Recent Analyses (This Session)</div>')
+                        history_html = gr.HTML(
+                            value='<div class="hist-empty">'
+                                  '<span class="hist-empty-icon">📋</span>'
+                                  '<p>No checks yet in this session.</p>'
+                                  '</div>',
+                        )
+                        clear_history_btn = gr.Button(
+                            "🗑 Clear History",
+                            size="sm",
+                            variant="secondary",
+                            elem_classes=["fnd-btn-secondary"],
+                        )
 
-                gr.HTML('<p class="section-label" style="margin-top:1.2rem">💡 Try Sample News</p>')
-                sample_radio = gr.Radio(
-                    choices=list(SAMPLE_NEWS.keys()),
-                    label="",
-                    value=None,
-                    elem_classes=["sample-btn"],
-                )
+                    with gr.Column():
+                        gr.HTML('<div class="fnd-card-title">📊 Session Statistics</div>')
+                        stats_html = gr.HTML(
+                            value='<div class="stats-empty">'
+                                  '<p>Run at least one check to see statistics.</p>'
+                                  '</div>',
+                        )
 
+            # ── TAB 3: HOW IT WORKS ───────────────────────────────────────
+            with gr.TabItem("ℹ️ How It Works", id="howto"):
                 gr.HTML("""
-                <div class="result-card" style="margin-top:1rem;padding:1.25rem 1.4rem">
-                    <p class="section-label">⚙️ How It Works — V3</p>
-                    <div>
-                        <div class="step-item"><div class="step-num">1</div><span>URL resolved → article text extracted (if URL input)</span></div>
-                        <div class="step-item"><div class="step-num">2</div><span>Core factual claim auto-extracted from text</span></div>
-                        <div class="step-item"><div class="step-num">3</div><span>Keywords searched across Google News RSS &amp; DuckDuckGo</span></div>
-                        <div class="step-item"><div class="step-num">4</div><span>Evidence classified: supporting / contradicting / neutral</span></div>
-                        <div class="step-item"><div class="step-num">5</div><span>Sources filtered through trust whitelist (scored 0–100)</span></div>
-                        <div class="step-item"><div class="step-num">6</div><span>Best ML model from 4-model comparison runs prediction</span></div>
-                        <div class="step-item"><div class="step-num">7</div><span>ML + Evidence + Linguistics combined via weighted decision</span></div>
-                        <div class="step-item"><div class="step-num">8</div><span>Separate ML, Evidence &amp; Overall confidence scores generated</span></div>
-                        <div class="step-item"><div class="step-num">9</div><span>AI reasoning with supporting/conflicting evidence returned</span></div>
+                <div style="max-width:780px;margin:0 auto;padding:var(--space-4) 0;">
+
+                  <div class="fnd-card" style="margin-bottom:var(--space-4);">
+                    <div class="fnd-card-title">🏗 Architecture</div>
+                    <p style="font-size:0.88rem;color:var(--text-secondary);
+                               line-height:1.8;margin-bottom:var(--space-4);">
+                      The system combines machine learning with live evidence gathering
+                      from trusted news publishers — with zero paid APIs required.
+                    </p>
+                    <div style="font-family:var(--font-mono);font-size:0.78rem;
+                                color:var(--text-secondary);
+                                background:var(--bg-code);padding:var(--space-4);
+                                border-radius:var(--radius-md);
+                                border:1px solid var(--border-subtle);
+                                white-space:pre;overflow-x:auto;">
+User Input (Text or URL)
+        ↓
+URL? → Fetch article text
+        ↓
+Text Cleaning &amp; Preprocessing
+        ↓
+Factual Claim Extraction (primary claim)
+        ↓
+Keyword Mining (top 8 keywords)
+        ↓
+Linguistic Signal Analysis
+        ↓
+Parallel Live Search (ThreadPoolExecutor)
+  ├── Google News RSS   (Priority 1)
+  ├── DuckDuckGo Lite   (Priority 2 / fallback)
+  └── PIB Fact-Check    (supplementary)
+        ↓
+Trust-Weighted Evidence Scoring
+        ↓
+Best ML Model Prediction (TF-IDF + auto-selected classifier)
+        ↓
+Weighted Decision Fusion
+  ML 45% + Evidence 35% + Linguistics 20%
+        ↓
+REAL / FAKE / UNVERIFIED + Confidence Scores
                     </div>
+                  </div>
+
+                  <div class="fnd-card" style="margin-bottom:var(--space-4);">
+                    <div class="fnd-card-title">🏅 Trusted Sources</div>
+                    <div style="font-size:0.85rem;color:var(--text-secondary);
+                                line-height:1.9;">
+                      <strong style="color:var(--text-primary);">40+ whitelisted domains</strong>
+                      including Reuters (98), AP (98), BBC (97), The Hindu (95),
+                      PIB (100), WHO (100), ISRO (100), RBI (100),
+                      FactCheck.org (99), AltNews (97), NDTV (93) and more.
+                      <br><br>
+                      Sources not in the whitelist are ignored — the system never
+                      bases verdicts on unknown websites.
+                    </div>
+                  </div>
+
+                  <div class="fnd-card" style="margin-bottom:var(--space-4);">
+                    <div class="fnd-card-title">📊 Confidence Score Breakdown</div>
+                    <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.9;">
+                      <strong style="color:var(--text-primary);">ML Confidence (45%)</strong>
+                      — The ML model's prediction probability using TF-IDF features.<br>
+                      <strong style="color:var(--text-primary);">Evidence Confidence (35%)</strong>
+                      — Agreement strength among trusted news sources found online.<br>
+                      <strong style="color:var(--text-primary);">Linguistic Analysis (20%)</strong>
+                      — Presence of misinformation markers and credibility signals.<br><br>
+                      When no evidence is found, weights shift to ML 45% + Linguistics 55%.
+                    </div>
+                  </div>
+
+                  <div class="fnd-card">
+                    <div class="fnd-card-title">⚠️ Limitations</div>
+                    <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.9;">
+                      • Paywalled or JavaScript-rendered articles may not extract correctly.<br>
+                      • The ML model's accuracy depends on the training dataset size.<br>
+                      • Very recent breaking news may have no trusted-source coverage yet.<br>
+                      • The system is for <em>research and education only</em> — not a legal authority.<br>
+                      • Always verify with multiple sources before making any decision.
+                    </div>
+                  </div>
+
                 </div>
                 """)
 
-            with gr.Column(scale=1):
-                gr.HTML('<p class="section-label">📊 Verification Result</p>')
-                result_html = gr.HTML(
-                    value="""
-                    <div class="result-card" style="text-align:center;padding:3rem 1rem">
-                        <p style="font-size:2.5rem;margin:0">🔍</p>
-                        <p style="color:var(--text-secondary);margin:0.5rem 0 0;font-size:0.95rem">
-                            Enter news text or a URL and click <strong>Detect &amp; Verify</strong>
-                        </p>
-                        <p style="color:var(--text-secondary);margin:0.25rem 0 0;font-size:0.8rem">
-                            Results with confidence scores and source links will appear here
-                        </p>
-                    </div>"""
-                )
+        # ── Footer ─────────────────────────────────────────────────────────
+        gr.HTML(_footer_html())
 
-                with gr.Accordion("📋 Export Result as Text", open=False):
-                    result_text = gr.Textbox(
-                        label="Copy-ready plain text report",
-                        lines=12,
-                        interactive=False,
-                        show_copy_button=True,
-                        elem_classes=["copy-result-box"],
-                    )
+        # ════════════════════════════════════════════════════════════════════
+        # EVENT WIRING
+        # ════════════════════════════════════════════════════════════════════
 
-        gr.HTML("""
-        <div class="disclaimer-card">
-            <span style="font-size:1.1rem;flex-shrink:0">⚠️</span>
-            <p style="margin:0;font-size:0.82rem;color:var(--text-secondary);line-height:1.55">
-                <strong style="color:var(--brand-blue)">Disclaimer:</strong>
-                This tool is an AI assistant and should not be the sole basis for determining
-                the veracity of news. Always cross-reference with multiple authoritative sources.
-                The system never claims 100% certainty.
-            </p>
-        </div>
-        """)
+        outputs = [
+            verdict_html,
+            reasoning_html,
+            sources_html,
+            keywords_html,
+            copy_html,
+            history_html,
+            stats_html,
+            pdf_download,
+            txt_download,
+            json_download,
+            history_state,
+        ]
 
-        gr.HTML("""
-        <div class="app-footer" style="margin-top:1.25rem">
-
-            <div style="font-size:0.68rem;font-weight:800;text-transform:uppercase;
-                        letter-spacing:1.2px;color:var(--text-muted);margin-bottom:1rem">
-                👨‍💻 Project Team — AI &amp; ML Internship 2026
-            </div>
-
-            <div class="team-grid">
-                <div class="team-card">
-                    <div class="team-avatar">👨‍💻</div>
-                    <div class="team-name">Naman Kumar</div>
-                    <div class="team-role">Full Stack AI Developer<br>UI/UX Designer</div>
-                    <span class="team-role-badge">Project Lead</span>
-                </div>
-                <div class="team-card">
-                    <div class="team-avatar">⚙️</div>
-                    <div class="team-name">Parmeshwar Kumar</div>
-                    <div class="team-role">Backend Developer<br>API Integration</div>
-                    <span class="team-role-badge">Backend</span>
-                </div>
-                <div class="team-card">
-                    <div class="team-avatar">🤖</div>
-                    <div class="team-name">Amit Kumar</div>
-                    <div class="team-role">ML Engineer<br>Dataset &amp; Model Training</div>
-                    <span class="team-role-badge">ML / AI</span>
-                </div>
-                <div class="team-card">
-                    <div class="team-avatar">📖</div>
-                    <div class="team-name">Prince Kumar Chaurasiya</div>
-                    <div class="team-role">Research &amp; Documentation<br>Lead</div>
-                    <span class="team-role-badge">Research</span>
-                </div>
-                <div class="team-card">
-                    <div class="team-avatar">🧪</div>
-                    <div class="team-name">Dhiraj Kumar</div>
-                    <div class="team-role">QA Engineer<br>Performance Testing</div>
-                    <span class="team-role-badge">QA</span>
-                </div>
-                <div class="team-card">
-                    <div class="team-avatar">🔬</div>
-                    <div class="team-name">MD. Tausim Akhtar</div>
-                    <div class="team-role">AI Research<br>Contributor</div>
-                    <span class="team-role-badge">Research</span>
-                </div>
-            </div>
-
-            <div style="width:80%;height:1px;background:linear-gradient(90deg,transparent,
-                 var(--card-border),transparent);margin:1.5rem auto"></div>
-
-            <p class="footer-inst">🏛️ Government Polytechnic West Champaran</p>
-            <p class="footer-sub">Department of Computer Science &amp; Engineering</p>
-            <p class="footer-sub">Affiliated to SBTE Bihar · Session 2025–2028</p>
-
-            <div style="margin-top:1rem">
-                <p class="footer-copyright">
-                    © 2026 Government Polytechnic West Champaran · SBTE Bihar
-                </p>
-                <p class="footer-copyright">
-                    AI Fake News Detection &amp; Live Verification System — Version 3
-                </p>
-            </div>
-        </div>
-        """)
-        # ── Event Handlers ────────────────────────────────────────────────────────
-
-        detect_btn.click(
+        verify_btn.click(
             fn=run_check,
-            inputs=[news_input],
-            outputs=[result_html, result_text],
-            api_name="detect",
+            inputs=[news_input, history_state],
+            outputs=outputs,
+            api_name="verify",
         )
 
         news_input.submit(
             fn=run_check,
-            inputs=[news_input],
-            outputs=[result_html, result_text],
+            inputs=[news_input, history_state],
+            outputs=outputs,
         )
 
-        sample_radio.change(
+        sample_dropdown.change(
             fn=load_sample,
-            inputs=[sample_radio],
+            inputs=[sample_dropdown],
             outputs=[news_input],
         )
 
-        clear_btn.click(
-            fn=clear_all,
-            inputs=[],
-            outputs=[news_input, result_html, result_text],
+        clear_history_btn.click(
+            fn=clear_history_fn,
+            inputs=[history_state],
+            outputs=[history_html, stats_html, history_state],
         )
 
     return demo
 
 
-# ── Entry Point ───────────────────────────────────────────────────────────────
-demo = create_app()
+# ══════════════════════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ══════════════════════════════════════════════════════════════════════════════
 
-# HF Spaces: server_name must be "0.0.0.0", share must be False.
-# The platform handles routing — share=True causes a conflict on Spaces.
-# Locally: share=False also works fine (localhost:7860).
-demo.launch(
-    server_name="0.0.0.0",
-    server_port=7860,
-    share=False,
-    show_error=True,
-    allowed_paths=["."],
-)
+if __name__ == "__main__":
+    logger.info("=" * 62)
+    logger.info("  %s v%s", APP_TITLE, APP_VERSION)
+    logger.info("  %s", INSTITUTION)
+    logger.info("  AI & ML Internship 2026")
+    logger.info("=" * 62)
+
+    demo = build_ui()
+    demo.launch(
+        server_name=SERVER_HOST,
+        server_port=SERVER_PORT,
+        share=SERVER_SHARE,
+        show_error=SERVER_SHOW_ERROR,
+        favicon_path=None,
+    )
