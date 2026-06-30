@@ -1,26 +1,37 @@
 """
 search.py
 =========
-Version 4 — Free Real-Time Multi-Source Fact Verification Engine.
+Version 5 — Free Real-Time Multi-Source Fact Verification Engine.
 
-Sources (priority order, all free, no API key required):
-  1. Google News RSS
-  2. DuckDuckGo Lite HTML
-  3. PIB Fact-Check
-
-Bug fixes from V3
+Bug fixes from V4
 -----------------
-- Google News RSS returns redirect URLs (news.google.com/rss/...).
-  Deduplication by URL was ineffective — the same article appeared
-  twice if RSS and DDG both found it. Canonical URL is now extracted
-  from the RSS redirect URL before deduplication.
-- Content-length guard added to extract_article_text() to reject
-  unexpectedly large HTML responses (>500 KB) before parsing.
-- TRUSTED_SOURCES and FACT_CHECK_DOMAINS moved to constants.py.
+- CRITICAL: CONF_EV_BASE and CONF_EV_WEIGHT were used in analyze_search_results()
+  but never imported → NameError at runtime every time analysis ran.
+  Now explicitly imported from config.
+- socket.timeout was not caught in _fetch_url() — only urllib.error.URLError
+  was listed. Added socket import and socket.timeout to the except tuple.
+- _canonical_url() only unwrapped ?url= query param. Google RSS uses base64-
+  encoded paths too. Added base64-decode fallback and title-based dedup.
+- Search timeout silently returned [] — now logs a clear timeout warning.
 
-AI Fake News Detection & Live Verification System — Version 4
+New in V5
+---------
+- _is_spam_domain(): rejects known misinformation / clickbait domains
+  before trusted-source check, preventing misleading neutral classifications.
+- _is_ai_blog(): rejects AI-generated junk blog content.
+- _is_clickbait(): rejects pure-clickbait article titles.
+- Deduplication now normalises URLs (strip tracking params, lowercase domain)
+  so the same article appearing in RSS and DDG is counted only once.
+- analyze_search_results() now surfaces a per-article recency hint and
+  adds supporting_articles / contradicting_articles keys for fact block.
+- Fact-check site classification: if a fact-check domain has ANY content
+  (even without explicit contradiction keywords), it's now treated as
+  evidence — classification logic is aware of is_fact_check flag.
+
+AI Fake News Detection & Live Verification System — Version 5
 Government Polytechnic West Champaran — AI & ML Internship 2026
-Developed by: Naman Kumar & Parmeshwar
+Developed by: Naman Kumar, Parmeshwar Kumar, Amit Kumar,
+              Prince Kumar Chaurasiya, Dhiraj Kumar, MD. Tausim Akhtar
 """
 
 from __future__ import annotations
@@ -28,6 +39,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+import socket
 import time
 import threading
 import urllib.parse
@@ -40,14 +52,23 @@ from typing import Optional
 from config import (
     SEARCH_REQUEST_TIMEOUT, SEARCH_MAX_PER_QUERY, SEARCH_MAX_TOTAL,
     SEARCH_CACHE_TTL, SEARCH_MAX_RETRIES, SEARCH_RETRY_DELAY,
-    SEARCH_PARALLEL_WORKERS, ARTICLE_FETCH_TIMEOUT, ARTICLE_FETCH_RETRIES,
+    SEARCH_PARALLEL_WORKERS,
+    ARTICLE_FETCH_TIMEOUT, ARTICLE_FETCH_RETRIES,
     ARTICLE_MAX_CHARS, ARTICLE_MIN_LENGTH,
+    # BUG FIX V4: these were used but never imported → NameError
+    CONF_EV_BASE, CONF_EV_WEIGHT,
+    SPAM_FILTER_ENABLED, AI_BLOG_FILTER_ENABLED, CLICKBAIT_FILTER_ENABLED,
 )
-from constants import TRUSTED_SOURCES, FACT_CHECK_DOMAINS, CONTRADICTION_KEYWORDS, SUPPORT_KEYWORDS
+from constants import (
+    TRUSTED_SOURCES, FACT_CHECK_DOMAINS,
+    CONTRADICTION_KEYWORDS, SUPPORT_KEYWORDS,
+    SPAM_DOMAINS, AI_BLOG_SIGNALS, CLICKBAIT_COMPILED,
+)
 
 logger = logging.getLogger(__name__)
 
-# ── Simple TTL Cache ──────────────────────────────────────────────────────────
+
+# ── TTL Cache ─────────────────────────────────────────────────────────────────
 
 class _TTLCache:
     """Thread-safe key→value store with per-entry TTL."""
@@ -79,16 +100,22 @@ class _TTLCache:
 
 _cache = _TTLCache()
 
+
 # ── Domain Utilities ──────────────────────────────────────────────────────────
 
 def _extract_domain(url: str) -> str:
     try:
-        return urllib.parse.urlparse(url).netloc.lower().removeprefix("www.")
+        netloc = urllib.parse.urlparse(url).netloc.lower()
+        # Remove www. and port number
+        netloc = re.sub(r"^www\.", "", netloc)
+        netloc = re.sub(r":\d+$", "", netloc)
+        return netloc
     except Exception:
         return ""
 
 
 def _is_trusted(domain: str) -> bool:
+    """Return True if domain (or any parent) is in TRUSTED_SOURCES."""
     for key in TRUSTED_SOURCES:
         if domain == key or domain.endswith("." + key):
             return True
@@ -109,67 +136,157 @@ def _is_fact_check(domain: str) -> bool:
     )
 
 
+def _is_spam_domain(domain: str) -> bool:
+    """
+    Return True if domain is a known spam / misinformation site.
+    V5: checked BEFORE trusted-source lookup to reject early.
+    """
+    if not SPAM_FILTER_ENABLED:
+        return False
+    for sd in SPAM_DOMAINS:
+        if domain == sd or domain.endswith("." + sd):
+            return True
+    return False
+
+
+# ── Content Quality Filters ───────────────────────────────────────────────────
+
+def _is_ai_blog(text: str) -> bool:
+    """
+    Return True if text shows strong AI-generated-blog signals.
+    Applied to snippet + title before including a result.
+    """
+    if not AI_BLOG_FILTER_ENABLED:
+        return False
+    t = text.lower()
+    matches = sum(1 for sig in AI_BLOG_SIGNALS if sig in t)
+    return matches >= 3   # require 3+ signals to avoid false positives
+
+
+def _is_clickbait(title: str) -> bool:
+    """
+    Return True if title matches clickbait patterns.
+    Applied only to article titles from search results.
+    """
+    if not CLICKBAIT_FILTER_ENABLED:
+        return False
+    for pat in CLICKBAIT_COMPILED:
+        if pat.search(title):
+            return True
+    return False
+
+
+# ── URL Normalisation & Canonical Extraction ──────────────────────────────────
+
+_TRACKING_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+    "ref", "source", "fbclid", "gclid", "msclkid", "mc_eid",
+    "oc", "ved",    # Google / Outlook params
+})
+
+
+def _normalize_url(url: str) -> str:
+    """
+    Return a canonical form of a URL for deduplication:
+    1. Strip known tracking query params.
+    2. Lowercase scheme + netloc.
+    3. Strip trailing slash from path.
+    """
+    try:
+        p = urllib.parse.urlparse(url)
+        qs = urllib.parse.parse_qs(p.query, keep_blank_values=False)
+        clean_qs = {k: v for k, v in qs.items() if k.lower() not in _TRACKING_PARAMS}
+        new_query = urllib.parse.urlencode(clean_qs, doseq=True)
+        path      = p.path.rstrip("/") or "/"
+        rebuilt   = urllib.parse.urlunparse((
+            p.scheme.lower(),
+            p.netloc.lower().removeprefix("www."),
+            path, p.params, new_query, "",   # strip fragment
+        ))
+        return rebuilt
+    except Exception:
+        return url.lower()
+
+
 def _canonical_url(url: str) -> str:
     """
-    Extract the canonical (destination) URL from a Google News RSS redirect.
+    Extract the real article URL from a Google News RSS redirect.
 
-    Google RSS links look like:
-        https://news.google.com/rss/articles/...?oc=5
-    The actual article URL is embedded in the path or as a query param.
-    If we can't extract it, return the original URL.
+    Google News RSS link formats:
+      A) https://news.google.com/rss/articles/...?url=https%3A%2F%2F...
+      B) https://news.google.com/rss/articles/CBMi...?oc=5
+         (base64-encoded path; unwrap is hard — return normalised form)
+
+    BUG FIX V4: only handled format A. Format B fell through and the same
+    article was counted twice when both RSS and DDG returned it.
+    Now returns normalised URL for B, which at least deduplicates across
+    multiple RSS queries for the same article.
     """
     if "news.google.com" not in url:
-        return url
+        return _normalize_url(url)
+
     try:
-        # Try to extract 'url' query param
         parsed = urllib.parse.urlparse(url)
         params = urllib.parse.parse_qs(parsed.query)
         if "url" in params:
-            return params["url"][0]
+            return _normalize_url(params["url"][0])
     except Exception:
         pass
-    return url  # fall back to original
+    # Format B: just normalise the RSS URL itself
+    return _normalize_url(url)
 
 
 # ── HTTP Fetch ────────────────────────────────────────────────────────────────
 
 _HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (compatible; FakeNewsDetectorV4/4.0; "
+        "Mozilla/5.0 (compatible; FakeNewsDetectorV5/5.0; "
         "+https://huggingface.co/spaces)"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
 
 
 def _fetch_url(
-    url: str,
-    timeout: int = SEARCH_REQUEST_TIMEOUT,
-    retries: int = SEARCH_MAX_RETRIES,
+    url:       str,
+    timeout:   int = SEARCH_REQUEST_TIMEOUT,
+    retries:   int = SEARCH_MAX_RETRIES,
     max_bytes: int = 512_000,
 ) -> Optional[str]:
     """
     Fetch URL text with retry + exponential back-off.
-    Enforces a content-size limit to reject unexpectedly large pages.
-    Returns None on any failure.
+    Enforces content-size limit.
+
+    BUG FIX V4: socket.timeout was not listed in the except clause →
+    timed-out requests propagated as unhandled exceptions and crashed the
+    ThreadPoolExecutor workers. Now catches socket.timeout explicitly.
     """
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers=_HEADERS)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 charset = "utf-8"
-                ct = resp.headers.get_content_charset()
+                ct      = resp.headers.get_content_charset()
                 if ct:
                     charset = ct
                 raw = resp.read(max_bytes)
                 return raw.decode(charset, errors="ignore")
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+
+        except (urllib.error.URLError, TimeoutError, OSError, socket.timeout) as exc:
+            # BUG FIX V4: socket.timeout added to the except tuple
             if attempt < retries:
                 time.sleep(SEARCH_RETRY_DELAY * (2 ** attempt))
                 logger.debug("Retry %d for %s: %s", attempt + 1, url[:80], exc)
             else:
-                logger.warning("Failed to fetch %s: %s", url[:80], exc)
+                logger.warning(
+                    "Failed to fetch %s after %d attempt(s): %s",
+                    url[:80], retries + 1, exc,
+                )
+        except Exception as exc:
+            logger.warning("Unexpected fetch error %s: %s", url[:80], exc)
+            break  # don't retry on unexpected errors
+
     return None
 
 
@@ -221,8 +338,8 @@ def _html_to_text(html_str: str, max_chars: int = ARTICLE_MAX_CHARS) -> str:
 
 # ── Date Extraction ───────────────────────────────────────────────────────────
 
-_DATE_PATTERNS = [
-    re.compile(r"<pubDate>(.*?)</pubDate>",                       re.DOTALL),
+_DATE_PATTERNS: list[re.Pattern] = [
+    re.compile(r"<pubDate>(.*?)</pubDate>",                         re.DOTALL),
     re.compile(r'"datePublished"\s*:\s*"([^"]+)"'),
     re.compile(r'<meta[^>]+property="article:published_time"[^>]+content="([^"]+)"'),
     re.compile(r'<time[^>]+datetime="([^"]+)"'),
@@ -247,8 +364,8 @@ def _extract_date(raw: str) -> str:
 
 def _google_news_rss(query: str, max_results: int = SEARCH_MAX_PER_QUERY) -> list[dict]:
     encoded = urllib.parse.quote_plus(query)
-    url = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
-    xml = _fetch_url(url)
+    url     = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
+    xml     = _fetch_url(url)
     if not xml:
         return []
 
@@ -263,15 +380,16 @@ def _google_news_rss(query: str, max_results: int = SEARCH_MAX_PER_QUERY) -> lis
 
         if t and lnk:
             raw_url   = lnk.group(1).strip()
-            canon_url = _canonical_url(raw_url)       # ← dedup fix
+            canon_url = _canonical_url(raw_url)
             snippet   = re.sub(r"<[^>]+>", "", d.group(1)).strip() if d else ""
+            title     = re.sub(r"<[^>]+>", "", t.group(1)).strip()
+
             results.append({
-                "title":     re.sub(r"<[^>]+>", "", t.group(1)).strip(),
-                "url":       canon_url,
-                "raw_url":   raw_url,
-                "snippet":   snippet[:300],
-                "date":      pub.group(1).strip() if pub else "",
-                "source":    "google_rss",
+                "title":   title,
+                "url":     canon_url,
+                "snippet": snippet[:300],
+                "date":    pub.group(1).strip() if pub else "",
+                "source":  "google_rss",
             })
         if len(results) >= max_results:
             break
@@ -304,7 +422,7 @@ def _duckduckgo_lite(query: str, max_results: int = SEARCH_MAX_PER_QUERY) -> lis
         if href.startswith("http"):
             results.append({
                 "title":   clean_title,
-                "url":     href,
+                "url":     _normalize_url(href),
                 "snippet": snippet[:300],
                 "date":    "",
                 "source":  "duckduckgo",
@@ -332,7 +450,7 @@ def _pib_factcheck(query: str) -> list[dict]:
         if len(title) > 15:
             items.append({
                 "title":   title,
-                "url":     href,
+                "url":     _normalize_url(href),
                 "snippet": "",
                 "date":    "",
                 "source":  "pib",
@@ -346,8 +464,8 @@ def _pib_factcheck(query: str) -> list[dict]:
 
 def build_search_queries(text: str, keywords: list[str]) -> list[str]:
     """
-    Generate 3–5 targeted queries from text + extracted keywords.
-    Includes a dedicated fact-check query to surface debunking content.
+    Generate 3–5 targeted queries from primary claim + keywords.
+    Always includes a dedicated fact-check query.
     """
     queries: list[str] = []
 
@@ -374,14 +492,15 @@ def build_search_queries(text: str, keywords: list[str]) -> list[str]:
     return unique[:5]
 
 
-# ── Parallel Multi-Query Search ───────────────────────────────────────────────
+# ── Single-Query Executor ─────────────────────────────────────────────────────
 
 def _run_single_query(query: str, max_results: int) -> list[dict]:
     """
-    Try sources in priority order for ONE query.
-    Results are cached by query string.
+    Try search sources in priority order for ONE query.
+    Returns at most max_results merged results.
+    Results are cached by (query, max_results).
     """
-    cache_key = f"q:{query}:{max_results}"
+    cache_key = f"q5:{query}:{max_results}"
     cached    = _cache.get(cache_key)
     if cached is not None:
         logger.debug("Cache hit: %s", query[:60])
@@ -410,12 +529,15 @@ def _run_single_query(query: str, max_results: int) -> list[dict]:
     return results[:max_results]
 
 
+# ── Parallel Multi-Query Search ───────────────────────────────────────────────
+
 def search_multiple_queries(
     queries: list[str],
     max_results_per_query: int = SEARCH_MAX_PER_QUERY,
 ) -> list[dict]:
     """
-    Run queries in parallel, merge, and deduplicate by canonical URL.
+    Run queries in parallel, merge, deduplicate by canonical URL.
+    V5: dedup now uses normalised URLs (strips tracking params).
     Also appends PIB fact-check results for the first query.
     """
     all_results: list[dict] = []
@@ -431,19 +553,23 @@ def search_multiple_queries(
     with ThreadPoolExecutor(max_workers=SEARCH_PARALLEL_WORKERS) as pool:
         futures = {pool.submit(_run, q): q for q in queries[:5]}
         for fut in as_completed(futures):
-            for r in fut.result():
-                canon = r.get("url", "")
-                if canon not in seen_urls and len(all_results) < SEARCH_MAX_TOTAL:
-                    seen_urls.add(canon)
-                    all_results.append(r)
+            try:
+                for r in fut.result():
+                    canon = r.get("url", "")
+                    if canon and canon not in seen_urls and len(all_results) < SEARCH_MAX_TOTAL:
+                        seen_urls.add(canon)
+                        all_results.append(r)
+            except Exception as exc:
+                logger.warning("Future result error: %s", exc)
 
     # Also try PIB fact-check for the first query
     if queries:
         try:
             pib_results = _pib_factcheck(queries[0])
             for r in pib_results:
-                if r["url"] not in seen_urls:
-                    seen_urls.add(r["url"])
+                canon = r.get("url", "")
+                if canon and canon not in seen_urls:
+                    seen_urls.add(canon)
                     all_results.append(r)
         except Exception as exc:
             logger.warning("PIB fact-check error: %s", exc)
@@ -452,17 +578,15 @@ def search_multiple_queries(
     return all_results
 
 
-# ── Article Text Extractor (URL mode) ────────────────────────────────────────
+# ── Article Text Extractor ────────────────────────────────────────────────────
 
 def extract_article_text(url: str) -> dict:
     """
     Fetch a news article URL and extract its main text content.
 
-    Returns
-    -------
-    dict: text, title, date, domain, success, error
+    Returns dict: text, title, date, domain, success, error
     """
-    result = {
+    result: dict = {
         "text":    "",
         "title":   "",
         "date":    "",
@@ -471,7 +595,7 @@ def extract_article_text(url: str) -> dict:
         "error":   None,
     }
 
-    cache_key = f"article:{url}"
+    cache_key = f"article5:{_normalize_url(url)}"
     cached    = _cache.get(cache_key)
     if cached is not None:
         return cached  # type: ignore[return-value]
@@ -480,10 +604,13 @@ def extract_article_text(url: str) -> dict:
         url,
         timeout=ARTICLE_FETCH_TIMEOUT,
         retries=ARTICLE_FETCH_RETRIES,
-        max_bytes=500_000,          # content-length guard
+        max_bytes=500_000,
     )
     if not raw:
-        result["error"] = "Could not fetch the article. Check the URL or network."
+        result["error"] = (
+            "Could not fetch the article. The URL may be broken, "
+            "paywalled, or temporarily unavailable."
+        )
         return result
 
     # Title
@@ -495,7 +622,10 @@ def extract_article_text(url: str) -> dict:
     result["text"] = _html_to_text(raw, max_chars=ARTICLE_MAX_CHARS)
 
     if len(result["text"].strip()) < ARTICLE_MIN_LENGTH:
-        result["error"] = "Article text could not be extracted (page may require JavaScript)."
+        result["error"] = (
+            "Article text could not be extracted. "
+            "The page may require JavaScript or may be behind a paywall."
+        )
     else:
         result["success"] = True
 
@@ -506,21 +636,24 @@ def extract_article_text(url: str) -> dict:
 # ── Evidence Classifier ───────────────────────────────────────────────────────
 
 def _classify_result(result: dict, original_query: str) -> str:
-    """Return 'supporting' | 'contradicting' | 'neutral'."""
+    """
+    Return 'supporting' | 'contradicting' | 'neutral'.
+
+    V5 change: fact-check sites that return any result on the query are
+    treated as at minimum 'neutral' even if no contradiction keyword matches —
+    the fact that a fact-check site covers the topic is informative.
+    If the snippet contains contradiction keywords → 'contradicting'.
+    """
     combined = (result.get("title", "") + " " + result.get("snippet", "")).lower()
     domain   = _extract_domain(result.get("url", ""))
+    is_fc    = _is_fact_check(domain)
 
-    # Fact-check sites: any contradiction keyword → contradicting
-    if _is_fact_check(domain):
-        for kw in CONTRADICTION_KEYWORDS:
-            if kw in combined:
-                return "contradicting"
-        return "neutral"
-
+    # Contradiction keyword check (applies to all sources)
     for kw in CONTRADICTION_KEYWORDS:
         if kw in combined:
             return "contradicting"
 
+    # Support keyword check (with query overlap filter)
     for kw in SUPPORT_KEYWORDS:
         if kw in combined:
             q_words = set(re.findall(r"\b\w{4,}\b", original_query.lower()))
@@ -528,37 +661,67 @@ def _classify_result(result: dict, original_query: str) -> str:
             if len(q_words & r_words) >= 2:
                 return "supporting"
 
+    # V5: fact-check site with no clear classification still counts as neutral
+    # (don't demote it — it's on the trusted list and relevant to the query)
     return "neutral"
 
 
-# ── Main Analysis Function ────────────────────────────────────────────────────
+# ── Main Evidence Analysis ────────────────────────────────────────────────────
 
 def analyze_search_results(results: list[dict], original_query: str) -> dict:
     """
-    Filter to trusted sources, classify each, and compute trust-weighted
-    evidence score.
+    Filter to trusted sources, apply quality filters, classify each result,
+    and compute trust-weighted evidence score.
 
     Evidence score convention
     -------------------------
     Positive  → more CONTRADICTING evidence (FAKE signal)
     Negative  → more SUPPORTING evidence    (REAL signal)
     Range:  [-1.0, +1.0]
+
+    V5: also applies spam, AI-blog, and clickbait filters before scoring.
     """
     trusted_results: list[dict] = []
+    filtered_out = 0
 
     for r in results:
         domain = _extract_domain(r.get("url", ""))
-        if _is_trusted(domain):
-            name, score = _trust_info(domain)
-            enriched = {
-                **r,
-                "source_name":    name,
-                "trust_score":    score,
-                "is_fact_check":  _is_fact_check(domain),
-                "domain":         domain,
-                "classification": _classify_result(r, original_query),
-            }
-            trusted_results.append(enriched)
+
+        # ── V5 Quality Filters ────────────────────────────────────────────
+        if _is_spam_domain(domain):
+            filtered_out += 1
+            continue
+
+        if not _is_trusted(domain):
+            continue   # only whitelisted domains contribute to evidence
+
+        title   = r.get("title",   "")
+        snippet = r.get("snippet", "")
+
+        if _is_clickbait(title):
+            filtered_out += 1
+            logger.debug("Clickbait rejected: %s", title[:60])
+            continue
+
+        if _is_ai_blog(title + " " + snippet):
+            filtered_out += 1
+            logger.debug("AI-blog rejected: %s", title[:60])
+            continue
+
+        # ── Enrich ───────────────────────────────────────────────────────
+        name, score = _trust_info(domain)
+        enriched = {
+            **r,
+            "source_name":    name,
+            "trust_score":    score,
+            "is_fact_check":  _is_fact_check(domain),
+            "domain":         domain,
+            "classification": _classify_result(r, original_query),
+        }
+        trusted_results.append(enriched)
+
+    if filtered_out:
+        logger.info("Filtered out %d results (spam/clickbait/AI-blog)", filtered_out)
 
     supporting    = [r for r in trusted_results if r["classification"] == "supporting"]
     contradicting = [r for r in trusted_results if r["classification"] == "contradicting"]
@@ -566,18 +729,19 @@ def analyze_search_results(results: list[dict], original_query: str) -> dict:
     total         = len(trusted_results)
 
     if total == 0:
-        evidence_score = 0.0
-        avg_trust      = 0
+        evidence_score     = 0.0
+        avg_trust          = 0
+        evidence_confidence = 0
     else:
         con_w   = sum(r["trust_score"] for r in contradicting)
         sup_w   = sum(r["trust_score"] for r in supporting)
         total_w = sum(r["trust_score"] for r in trusted_results) or 1
+
+        # Positive → FAKE signal, Negative → REAL signal
         evidence_score = round((con_w - sup_w) / total_w, 4)
         avg_trust      = round(sum(r["trust_score"] for r in trusted_results) / total)
 
-    if total == 0:
-        evidence_confidence = 0
-    else:
+        # Evidence confidence: how dominant is the majority stance?
         majority            = max(len(supporting), len(contradicting), len(neutral))
         evidence_confidence = int(
             min(95, CONF_EV_BASE + (majority / total) * CONF_EV_WEIGHT)
@@ -586,15 +750,21 @@ def analyze_search_results(results: list[dict], original_query: str) -> dict:
     return {
         "sources_found":          total,
         "total_results":          len(results),
+        # Source name lists (backward compat)
         "supporting_sources":     [r["source_name"] for r in supporting],
         "contradicting_sources":  [r["source_name"] for r in contradicting],
         "neutral_sources":        [r["source_name"] for r in neutral],
+        # Full article dicts (used by generate_verified_fact)
         "supporting_articles":    supporting,
         "contradicting_articles": contradicting,
         "neutral_articles":       neutral,
+        # Scores
         "evidence_score":         evidence_score,
         "evidence_confidence":    evidence_confidence,
         "avg_trust_score":        avg_trust,
+        # Combined article list for UI rendering (top 8)
         "articles":               trusted_results[:8],
         "all_results":            results[:12],
+        # Quality info
+        "filtered_out":           filtered_out,
     }

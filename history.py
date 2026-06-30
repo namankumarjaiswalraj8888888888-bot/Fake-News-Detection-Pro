@@ -1,191 +1,210 @@
 """
 history.py
 ==========
-Version 4 — In-session search history and statistics.
+Version 5 — In-session verification history manager.
 
-Stores the last N verification results in memory (per Gradio session).
-Provides statistics panel data: total checks, REAL/FAKE/UNVERIFIED counts,
-average confidence, average analysis time.
+Changes from V4
+---------------
+- Max history raised from 20 → 100 (EXPORT_MAX_HISTORY from config).
+- Added delete_at(index) — remove a single entry by position.
+- Added search(query) — return entries whose text/verdict matches query.
+- Added export_all() — dump history as JSON string for download.
+- History entries now store all 5 V5 confidence keys.
+- summary() helper used by the UI to render a one-line history row.
+- Thread-safe via threading.Lock (same session can call from multiple threads).
 
-Note: History does NOT persist across page refreshes (Gradio stateless).
-For persistent history, integrate a DB or file-backed store in a future version.
-
-AI Fake News Detection & Live Verification System — Version 4
+AI Fake News Detection & Live Verification System — Version 5
 Government Polytechnic West Champaran — AI & ML Internship 2026
-Developed by: Naman Kumar & Parmeshwar
+Developed by: Naman Kumar, Parmeshwar Kumar, Amit Kumar,
+              Prince Kumar Chaurasiya, Dhiraj Kumar, MD. Tausim Akhtar
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import threading
 from datetime import datetime
-from typing import Optional
 
-from config import EXPORT_MAX_HISTORY
+from config import EXPORT_MAX_HISTORY, APP_VERSION, INSTITUTION
+
+logger = logging.getLogger(__name__)
 
 
 class VerificationHistory:
     """
-    Lightweight in-memory store for one Gradio session's verification history.
-    Instantiated once per session via gr.State().
+    Thread-safe in-memory store for the last EXPORT_MAX_HISTORY (100) results.
+
+    Each entry is a dict with keys:
+        timestamp, text_preview, verdict, overall_confidence,
+        ml_confidence, evidence_confidence, linguistic_confidence,
+        fact_confidence, elapsed_seconds, sources_found, primary_claim
     """
 
-    def __init__(self) -> None:
+    def __init__(self, maxsize: int = EXPORT_MAX_HISTORY) -> None:
         self._entries: list[dict] = []
+        self._max     = maxsize
+        self._lock    = threading.Lock()
 
-    # ── Write ─────────────────────────────────────────────────────────────────
+    # ── Add ───────────────────────────────────────────────────────────────────
 
-    def add(self, result: dict, query_text: str = "") -> None:
-        """Append a completed verification result. Trims to EXPORT_MAX_HISTORY."""
-        entry = {
-            "timestamp":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "query":        (query_text or result.get("original_text", ""))[:200],
-            "verdict":      result.get("verdict", "UNVERIFIED"),
-            "confidence":   result.get("overall_confidence", 0),
-            "ml_conf":      result.get("ml_confidence", 0),
-            "ev_conf":      result.get("evidence_confidence", 0),
-            "elapsed":      result.get("elapsed_seconds", 0),
-            "sources":      result.get("evidence_result", {}).get("sources_found", 0),
-            "keywords":     result.get("keywords", []),
-            "result":       result,      # full result for re-export
+    def add(self, result: dict) -> None:
+        """
+        Prepend a new entry from a check_news() result dict.
+        Oldest entry is dropped when the store exceeds maxsize.
+        """
+        original = result.get("original_text", "")
+        text_preview = (original[:90] + "…") if len(original) > 90 else original
+
+        entry: dict = {
+            "timestamp":             datetime.now().isoformat(timespec="seconds"),
+            "text_preview":          text_preview,
+            "verdict":               result.get("verdict",              "UNVERIFIED"),
+            "overall_confidence":    result.get("overall_confidence",   0),
+            "ml_confidence":         result.get("ml_confidence",        0),
+            "evidence_confidence":   result.get("evidence_confidence",  0),
+            "linguistic_confidence": result.get("linguistic_confidence",0),
+            "fact_confidence":       result.get("fact_confidence",      0),
+            "elapsed_seconds":       result.get("elapsed_seconds",      0.0),
+            "sources_found":         result.get("evidence_result",{}).get("sources_found", 0),
+            "primary_claim":         result.get("primary_claim",        ""),
+            "combined_score":        result.get("combined_score",       0.0),
+            "is_url":                result.get("url_meta",  {}).get("is_url", False),
+            "url":                   result.get("url_meta",  {}).get("url",    ""),
+            "error":                 result.get("error"),
         }
-        self._entries.insert(0, entry)   # newest first
-        if len(self._entries) > EXPORT_MAX_HISTORY:
-            self._entries = self._entries[:EXPORT_MAX_HISTORY]
+
+        with self._lock:
+            self._entries.insert(0, entry)
+            if len(self._entries) > self._max:
+                self._entries = self._entries[: self._max]
+
+        logger.debug("History: added '%s' → %s", text_preview[:40], entry["verdict"])
 
     # ── Read ──────────────────────────────────────────────────────────────────
 
-    def get_all(self) -> list[dict]:
-        return list(self._entries)
+    def all(self) -> list[dict]:
+        """Return a shallow copy of all entries (newest first)."""
+        with self._lock:
+            return list(self._entries)
 
-    def get_latest(self) -> Optional[dict]:
-        return self._entries[0] if self._entries else None
+    def get(self, index: int) -> dict | None:
+        """Return entry at position (0 = most recent) or None."""
+        with self._lock:
+            if 0 <= index < len(self._entries):
+                return dict(self._entries[index])
+            return None
 
     def count(self) -> int:
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)
+
+    def is_empty(self) -> bool:
+        return self.count() == 0
+
+    # ── Search ────────────────────────────────────────────────────────────────
+
+    def search(self, query: str) -> list[tuple[int, dict]]:
+        """
+        Return (original_index, entry) pairs whose text_preview, verdict,
+        or primary_claim contains query (case-insensitive).
+        """
+        q = query.strip().lower()
+        if not q:
+            with self._lock:
+                return list(enumerate(self._entries))
+
+        with self._lock:
+            return [
+                (i, e) for i, e in enumerate(self._entries)
+                if (
+                    q in e.get("text_preview",  "").lower()
+                    or q in e.get("verdict",     "").lower()
+                    or q in e.get("primary_claim","").lower()
+                )
+            ]
+
+    # ── Delete ────────────────────────────────────────────────────────────────
+
+    def delete_at(self, index: int) -> bool:
+        """
+        Remove the entry at position index.
+        Returns True if successful, False if index out of range.
+        """
+        with self._lock:
+            if 0 <= index < len(self._entries):
+                removed = self._entries.pop(index)
+                logger.debug("History: deleted '%s'", removed.get("text_preview","")[:40])
+                return True
+            return False
 
     def clear(self) -> None:
-        self._entries = []
+        """Remove all entries."""
+        with self._lock:
+            count = len(self._entries)
+            self._entries = []
+        logger.info("History: cleared %d entries", count)
 
-    # ── Statistics ────────────────────────────────────────────────────────────
+    # ── Export ────────────────────────────────────────────────────────────────
 
-    def stats(self) -> dict:
-        """Return aggregate statistics across all checks in this session."""
-        total = len(self._entries)
-        if total == 0:
-            return {
-                "total":          0,
-                "real_count":     0,
-                "fake_count":     0,
-                "unverified_count": 0,
-                "real_pct":       0,
-                "fake_pct":       0,
-                "unverified_pct": 0,
-                "avg_confidence": 0,
-                "avg_elapsed":    0.0,
-                "avg_sources":    0,
-            }
-
-        real_c = sum(1 for e in self._entries if e["verdict"] == "REAL")
-        fake_c = sum(1 for e in self._entries if e["verdict"] == "FAKE")
-        unv_c  = total - real_c - fake_c
-
-        avg_conf    = round(sum(e["confidence"] for e in self._entries) / total)
-        avg_elapsed = round(sum(e["elapsed"]    for e in self._entries) / total, 2)
-        avg_sources = round(sum(e["sources"]    for e in self._entries) / total)
-
-        return {
-            "total":            total,
-            "real_count":       real_c,
-            "fake_count":       fake_c,
-            "unverified_count": unv_c,
-            "real_pct":         round(real_c / total * 100),
-            "fake_pct":         round(fake_c / total * 100),
-            "unverified_pct":   round(unv_c  / total * 100),
-            "avg_confidence":   avg_conf,
-            "avg_elapsed":      avg_elapsed,
-            "avg_sources":      avg_sources,
+    def export_all(self) -> str:
+        """
+        Return all history entries as a formatted JSON string.
+        Safe for file download.
+        """
+        payload = {
+            "export_version": APP_VERSION,
+            "institution":    INSTITUTION,
+            "exported_at":    datetime.now().isoformat(),
+            "total_entries":  self.count(),
+            "entries":        self.all(),
         }
+        return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
-    # ── HTML Renderers ────────────────────────────────────────────────────────
+    # ── UI Helpers ────────────────────────────────────────────────────────────
 
-    def render_history_html(self) -> str:
-        """Render compact history list as HTML for a Gradio HTML component."""
-        if not self._entries:
-            return (
-                '<div class="hist-empty">'
-                '<span class="hist-empty-icon">📋</span>'
-                '<p>No checks yet in this session.</p>'
-                '<p class="hist-sub">Your recent analyses will appear here.</p>'
-                '</div>'
-            )
+    def summary(self, entry: dict) -> str:
+        """
+        Return a one-line summary string for a history row in the UI.
+        Format:  [HH:MM]  VERDICT (conf%)  —  text preview…
+        """
+        ts       = entry.get("timestamp", "")
+        time_str = ts[11:16] if len(ts) >= 16 else ts
+        verdict  = entry.get("verdict",          "?")
+        conf     = entry.get("overall_confidence", 0)
+        preview  = entry.get("text_preview",       "")
+        icon_map = {
+            "REAL":                 "✅",
+            "LIKELY REAL":          "🟢",
+            "PARTIALLY TRUE":       "🔵",
+            "UNVERIFIED":           "⚠️",
+            "INSUFFICIENT EVIDENCE":"❓",
+            "MIXED":                "🟡",
+            "MISLEADING":           "🟠",
+            "LIKELY FAKE":          "🔴",
+            "FAKE":                 "❌",
+        }
+        icon = icon_map.get(verdict, "❓")
+        return f"[{time_str}]  {icon} {verdict} ({conf}%)  —  {preview}"
 
-        rows = []
-        for e in self._entries[:10]:
-            v   = e["verdict"]
-            ico = {"REAL": "✅", "FAKE": "❌"}.get(v, "⚠️")
-            cls = {"REAL": "hist-real", "FAKE": "hist-fake"}.get(v, "hist-unv")
-            q   = e["query"][:80] + ("…" if len(e["query"]) > 80 else "")
-            rows.append(
-                f'<div class="hist-row">'
-                f'  <span class="hist-icon {cls}">{ico}</span>'
-                f'  <div class="hist-info">'
-                f'    <div class="hist-query">{q}</div>'
-                f'    <div class="hist-meta">'
-                f'      <span class="hist-verdict {cls}">{v}</span>'
-                f'      <span class="hist-conf">{e["confidence"]}% conf</span>'
-                f'      <span class="hist-time">{e["timestamp"]}</span>'
-                f'      <span class="hist-src">{e["sources"]} sources</span>'
-                f'    </div>'
-                f'  </div>'
-                f'</div>'
-            )
-        return "\n".join(rows)
+    def as_display_rows(self) -> list[list[str]]:
+        """
+        Return data as rows for a Gradio Dataframe:
+        [timestamp, verdict, conf%, sources, preview]
+        """
+        with self._lock:
+            return [
+                [
+                    e.get("timestamp", "")[:19],
+                    e.get("verdict", ""),
+                    f"{e.get('overall_confidence', 0)}%",
+                    str(e.get("sources_found", 0)),
+                    e.get("text_preview", ""),
+                ]
+                for e in self._entries
+            ]
 
-    def render_stats_html(self) -> str:
-        """Render session statistics as HTML."""
-        s = self.stats()
-        if s["total"] == 0:
-            return (
-                '<div class="stats-empty">'
-                '<p>Run at least one check to see session statistics.</p>'
-                '</div>'
-            )
 
-        bars = [
-            ("✅ REAL",       s["real_pct"],       "#22c55e"),
-            ("❌ FAKE",       s["fake_pct"],        "#ef4444"),
-            ("⚠️ UNVERIFIED", s["unverified_pct"],  "#eab308"),
-        ]
-        bar_html = ""
-        for label, pct, color in bars:
-            bar_html += (
-                f'<div class="stat-bar-row">'
-                f'  <span class="stat-bar-label">{label}</span>'
-                f'  <div class="stat-bar-track">'
-                f'    <div class="stat-bar-fill" style="width:{pct}%;background:{color}"></div>'
-                f'  </div>'
-                f'  <span class="stat-bar-pct">{pct}%</span>'
-                f'</div>'
-            )
+# ── Module-level singleton ────────────────────────────────────────────────────
 
-        return (
-            f'<div class="stats-grid">'
-            f'  <div class="stat-card">'
-            f'    <div class="stat-num">{s["total"]}</div>'
-            f'    <div class="stat-lbl">Total Checks</div>'
-            f'  </div>'
-            f'  <div class="stat-card">'
-            f'    <div class="stat-num">{s["avg_confidence"]}%</div>'
-            f'    <div class="stat-lbl">Avg Confidence</div>'
-            f'  </div>'
-            f'  <div class="stat-card">'
-            f'    <div class="stat-num">{s["avg_elapsed"]}s</div>'
-            f'    <div class="stat-lbl">Avg Time</div>'
-            f'  </div>'
-            f'  <div class="stat-card">'
-            f'    <div class="stat-num">{s["avg_sources"]}</div>'
-            f'    <div class="stat-lbl">Avg Sources</div>'
-            f'  </div>'
-            f'</div>'
-            f'<div class="stat-bars">{bar_html}</div>'
-        )
+history = VerificationHistory(maxsize=EXPORT_MAX_HISTORY)

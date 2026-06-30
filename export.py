@@ -1,411 +1,464 @@
 """
 export.py
 =========
-Version 4 — Export verification results as PDF, TXT, or JSON.
+Version 5 — Professional forensic verification report generator.
 
-Uses only stdlib + fpdf2 (pure-Python PDF, no system dependencies).
-fpdf2 is optional — if missing, PDF export gracefully falls back to TXT.
+Changes from V4
+---------------
+- Report now includes all 5 V5 confidence components:
+    Overall / ML / Evidence / Linguistic / Fact Confidence.
+- Added 'Verified Fact' section to every export.
+- Added 'Related Facts' section from verified_fact.related_info.
+- _verdict_label() and _verdict_icon() now cover all 9 V5 verdicts
+  (V4 only handled 3 → would KeyError on new verdicts).
+- TXT export redesigned to look like a professional forensic audit report.
+- JSON export includes verdict_meta dict for downstream consumers.
+- PDF export (fpdf2) uses section headers and indented bullet layout.
 
-AI Fake News Detection & Live Verification System — Version 4
+AI Fake News Detection & Live Verification System — Version 5
 Government Polytechnic West Champaran — AI & ML Internship 2026
-Developed by: Naman Kumar & Parmeshwar
+Developed by: Naman Kumar, Parmeshwar Kumar, Amit Kumar,
+              Prince Kumar Chaurasiya, Dhiraj Kumar, MD. Tausim Akhtar
 """
 
 from __future__ import annotations
 
+import io
 import json
-import os
-import tempfile
-import textwrap
+import logging
+import re
 from datetime import datetime
-from typing import Optional
 
-from config import (
-    APP_TITLE, APP_VERSION, INSTITUTION, DEVELOPERS,
-    EXPORT_PDF_FONT,
-)
+from config import APP_VERSION, INSTITUTION, BOARD, INTERNSHIP, DEVELOPERS
+
+logger = logging.getLogger(__name__)
+
+_DIVIDER  = "═" * 54
+_THIN_DIV = "─" * 54
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Verdict Helpers ───────────────────────────────────────────────────────────
 
-def _timestamp() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+_VERDICT_ICONS: dict[str, str] = {
+    "REAL":                 "✅",
+    "LIKELY REAL":          "🟢",
+    "PARTIALLY TRUE":       "🔵",
+    "UNVERIFIED":           "⚠️",
+    "INSUFFICIENT EVIDENCE":"❓",
+    "MIXED":                "🟡",
+    "MISLEADING":           "🟠",
+    "LIKELY FAKE":          "🔴",
+    "FAKE":                 "❌",
+}
+
+_VERDICT_LABELS: dict[str, str] = {
+    "REAL":                 "REAL NEWS",
+    "LIKELY REAL":          "LIKELY REAL",
+    "PARTIALLY TRUE":       "PARTIALLY TRUE",
+    "UNVERIFIED":           "UNVERIFIED",
+    "INSUFFICIENT EVIDENCE":"INSUFFICIENT EVIDENCE",
+    "MIXED":                "MIXED",
+    "MISLEADING":           "MISLEADING",
+    "LIKELY FAKE":          "LIKELY FAKE",
+    "FAKE":                 "FAKE NEWS",
+}
+
+
+def _verdict_icon(verdict: str) -> str:
+    return _VERDICT_ICONS.get(verdict.upper(), "❓")
 
 
 def _verdict_label(verdict: str) -> str:
-    return {"REAL": "✅ REAL", "FAKE": "❌ FAKE"}.get(verdict, "⚠️ UNVERIFIED")
+    return _VERDICT_LABELS.get(verdict.upper(), verdict.upper())
 
 
-def _safe_text(text: str, max_chars: int = 300) -> str:
-    """Truncate and strip non-printable characters for safe embedding."""
-    return "".join(c if c.isprintable() or c in "\n\t" else " " for c in text[:max_chars])
+# ── ASCII Confidence Bar ──────────────────────────────────────────────────────
 
-
-def _dev_names() -> str:
-    return ", ".join(d["name"] for d in DEVELOPERS[:2])
+def _conf_bar(pct: int, width: int = 20) -> str:
+    filled = max(0, min(width, round(pct / 100 * width)))
+    return "█" * filled + "░" * (width - filled) + f"  {pct}%"
 
 
 # ── TXT Export ────────────────────────────────────────────────────────────────
 
-def export_txt(result: dict, query_text: str = "") -> str:
+def export_txt(result: dict) -> str:
     """
-    Write a plain-text verification report to a temp file.
-    Returns the file path.
+    Generate a professional forensic verification report as plain text.
+    Designed to look like an audit report — safe to print or share.
     """
-    verdict  = result.get("verdict", "UNVERIFIED")
-    overall  = result.get("overall_confidence", 0)
-    ml_conf  = result.get("ml_confidence", 0)
-    ev_conf  = result.get("evidence_confidence", 0)
-    elapsed  = result.get("elapsed_seconds", 0)
-    ml_name  = result.get("ml_result", {}).get("model_name", "—")
-    keywords = result.get("keywords", [])
-    reasoning = result.get("reasoning", [])
-    articles  = result.get("evidence_result", {}).get("articles", [])
-    sources   = result.get("evidence_result", {}).get("sources_found", 0)
+    verdict       = result.get("verdict",       "UNVERIFIED")
+    v_meta        = result.get("verdict_meta",  {})
+    v_icon        = _verdict_icon(verdict)
+    v_label       = _verdict_label(verdict)
+    v_desc        = v_meta.get("description", "")
+    ml_res        = result.get("ml_result",     {})
+    ev_res        = result.get("evidence_result", {})
+    ling          = result.get("linguistic_signals", {})
+    vf            = result.get("verified_fact", {})
+    url_meta      = result.get("url_meta",      {})
+    ts            = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+    elapsed       = result.get("elapsed_seconds", 0)
 
-    sep  = "=" * 70
-    sep2 = "-" * 70
-    lines: list[str] = [
-        sep,
-        f"  {APP_TITLE}",
-        f"  Version {APP_VERSION}  |  {INSTITUTION}",
-        f"  Developed by: {_dev_names()}",
-        sep,
-        "",
-        f"  Verification Report — {_timestamp()}",
-        f"  Analysis time: {elapsed}s",
-        "",
-        sep2,
-        "  QUERY",
-        sep2,
-        textwrap.fill(_safe_text(query_text or result.get("original_text", ""), 500),
-                      width=70, initial_indent="  ", subsequent_indent="  "),
-        "",
-        sep2,
-        "  VERDICT",
-        sep2,
-        f"  {_verdict_label(verdict)}",
-        f"  Overall Confidence  : {overall}%",
-        f"  ML Model Confidence : {ml_conf}%   [{ml_name}]",
-        f"  Evidence Confidence : {ev_conf}%   [{sources} trusted source(s) found]",
-        "",
-        sep2,
-        "  AI REASONING",
-        sep2,
-    ]
+    lines: list[str] = []
 
-    for i, r in enumerate(reasoning, 1):
-        lines.append(f"  {i}. {_safe_text(r, 400)}")
+    def ln(s: str = "") -> None:
+        lines.append(s)
 
-    if keywords:
-        lines += ["", sep2, "  KEYWORDS DETECTED", sep2,
-                  "  " + ", ".join(keywords)]
+    ln(_DIVIDER)
+    ln(f"  {APP_VERSION} — AI FAKE NEWS DETECTION REPORT")
+    ln(_DIVIDER)
+    ln(f"  Institution : {INSTITUTION}")
+    ln(f"  Programme   : {BOARD}")
+    ln(f"  Internship  : {INTERNSHIP}")
+    ln(f"  Generated   : {ts}")
+    ln(f"  Duration    : {elapsed:.2f} s")
+    ln()
 
+    # ── Query ─────────────────────────────────────────────────────────────────
+    ln(f"  {_THIN_DIV}")
+    ln("  QUERY")
+    ln(f"  {_THIN_DIV}")
+    if url_meta.get("is_url"):
+        ln(f"  URL          : {url_meta.get('url', '')[:80]}")
+        ln(f"  Domain       : {url_meta.get('domain', '')}")
+        ln(f"  Article      : {url_meta.get('article_title', '')[:70]}")
+        ln(f"  Date         : {url_meta.get('article_date', 'Unknown')}")
+    else:
+        raw = result.get("original_text", "")
+        ln(f"  Input        : {raw[:140]}")
+    ln(f"  Claim        : {result.get('primary_claim', '')[:140]}")
+    kw = ", ".join(result.get("keywords", [])[:6])
+    ln(f"  Keywords     : {kw}")
+    ln()
+
+    # ── Verdict ───────────────────────────────────────────────────────────────
+    ln(f"  {_THIN_DIV}")
+    ln("  VERDICT")
+    ln(f"  {_THIN_DIV}")
+    ln(f"  {v_icon}  {v_label}")
+    if v_desc:
+        ln(f"      {v_desc}")
+    ln(f"  Score        : {result.get('combined_score', 0):+.4f}")
+    ln()
+
+    # ── Confidence ────────────────────────────────────────────────────────────
+    ln(f"  {_THIN_DIV}")
+    ln("  CONFIDENCE SCORES")
+    ln(f"  {_THIN_DIV}")
+    ln(f"  Overall     {_conf_bar(result.get('overall_confidence',    0))}")
+    ln(f"  ML Model    {_conf_bar(result.get('ml_confidence',         0))}")
+    ln(f"  Evidence    {_conf_bar(result.get('evidence_confidence',   0))}")
+    ln(f"  Linguistic  {_conf_bar(result.get('linguistic_confidence', 0))}")
+    ln(f"  Fact        {_conf_bar(result.get('fact_confidence',       0))}")
+    ln()
+
+    # ── ML Analysis ───────────────────────────────────────────────────────────
+    ln(f"  {_THIN_DIV}")
+    ln("  ML ANALYSIS")
+    ln(f"  {_THIN_DIV}")
+    ln(f"  Model        : {ml_res.get('model_name', '—')}")
+    ln(f"  Prediction   : {ml_res.get('label', '—')}")
+    ln(f"  Prob Real    : {ml_res.get('prob_real', 0)*100:.1f}%")
+    ln(f"  Prob Fake    : {ml_res.get('prob_fake', 0)*100:.1f}%")
+    ln()
+
+    # ── Verified Fact ─────────────────────────────────────────────────────────
+    ln(f"  {_THIN_DIV}")
+    ln("  VERIFIED FACT")
+    ln(f"  {_THIN_DIV}")
+    vf_type    = vf.get("type",   "insufficient").upper()
+    vf_summary = vf.get("summary", "")
+    ln(f"  Status       : {vf_type}")
+    if vf_summary:
+        ln(f"  Summary      : {vf_summary[:200]}")
+    if vf.get("official_source"):
+        ln(f"  Source       : {vf.get('official_source', '')}")
+    if vf.get("official_url"):
+        ln(f"  Reference    : {vf.get('official_url', '')[:80]}")
+    if vf.get("publication_date"):
+        ln(f"  Published    : {vf.get('publication_date', '')}")
+    if vf.get("misconception"):
+        ln(f"  Misconception: {vf.get('misconception', '')[:200]}")
+    if vf.get("correct_fact"):
+        ln(f"  Correct Fact : {vf.get('correct_fact', '')[:200]}")
+    ln()
+
+    # ── Evidence ──────────────────────────────────────────────────────────────
+    ln(f"  {_THIN_DIV}")
+    ln("  EVIDENCE SUMMARY")
+    ln(f"  {_THIN_DIV}")
+    ln(f"  Trusted Sources  : {ev_res.get('sources_found', 0)}")
+    ln(f"  Evidence Score   : {ev_res.get('evidence_score', 0):+.4f}")
+    ln(f"  Avg Trust Score  : {ev_res.get('avg_trust_score', 0)}/100")
+
+    sup = ev_res.get("supporting_sources",    [])
+    con = ev_res.get("contradicting_sources", [])
+    neu = ev_res.get("neutral_sources",       [])
+    if sup:
+        ln(f"  Supporting       : {', '.join(sup[:4])}")
+    if con:
+        ln(f"  Contradicting    : {', '.join(con[:4])}")
+    if neu:
+        ln(f"  Neutral          : {', '.join(neu[:4])}")
+    ln()
+
+    # ── Source Details ────────────────────────────────────────────────────────
+    articles = ev_res.get("articles", [])
     if articles:
-        lines += ["", sep2, "  EVIDENCE SOURCES", sep2]
-        for a in articles[:6]:
-            cls  = a.get("classification", "neutral").upper()
-            name = a.get("source_name", a.get("domain", "Unknown"))
-            ts   = a.get("trust_score", 0)
-            titl = _safe_text(a.get("title", ""), 120)
-            url  = a.get("url", "")
-            lines += [
-                f"  [{cls}] {name}  (Trust: {ts}/100)",
-                f"  Title  : {titl}",
-                f"  URL    : {url}",
-                "",
-            ]
+        ln(f"  {_THIN_DIV}")
+        ln("  SOURCE DETAILS")
+        ln(f"  {_THIN_DIV}")
+        for i, a in enumerate(articles[:6], 1):
+            cls = a.get("classification", "neutral").upper()
+            ln(f"  [{i}] {a.get('source_name','?')} | Trust: {a.get('trust_score',0)}/100 | [{cls}]")
+            title = a.get("title",   "")
+            url   = a.get("url",     "")
+            date  = a.get("date",    "")
+            if title:
+                ln(f"      {title[:72]}")
+            if url:
+                ln(f"      {url[:80]}")
+            if date:
+                ln(f"      Published: {date[:30]}")
+            ln()
 
-    lines += [
-        sep,
-        "  DISCLAIMER",
-        sep2,
-        "  This tool is an AI assistant for educational and research purposes.",
-        "  Always cross-reference with multiple authoritative sources.",
-        "  The system never claims 100% certainty.",
-        "",
-        f"  © {APP_TITLE} — {INSTITUTION}",
-        sep,
-    ]
+    # ── Reasoning ─────────────────────────────────────────────────────────────
+    reasoning = result.get("reasoning", [])
+    if reasoning:
+        ln(f"  {_THIN_DIV}")
+        ln("  REASONING")
+        ln(f"  {_THIN_DIV}")
+        for item in reasoning:
+            for chunk in _wrap(item, 72):
+                ln(f"  • {chunk}")
+        ln()
 
-    fd, path = tempfile.mkstemp(suffix=".txt", prefix="fakenews_report_")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-    return path
+    # ── Related Facts ─────────────────────────────────────────────────────────
+    related = vf.get("related_info", [])
+    if related:
+        ln(f"  {_THIN_DIV}")
+        ln("  RELATED FACTS")
+        ln(f"  {_THIN_DIV}")
+        for r in related[:4]:
+            ln(f"  → {r[:80]}")
+        ln()
+
+    # ── Linguistic Analysis ───────────────────────────────────────────────────
+    ln(f"  {_THIN_DIV}")
+    ln("  LINGUISTIC ANALYSIS")
+    ln(f"  {_THIN_DIV}")
+    ln(f"  Word Count          : {ling.get('word_count',           0)}")
+    ln(f"  Fake Signal Count   : {ling.get('fake_signal_count',    0)}")
+    ln(f"  Real Signal Count   : {ling.get('real_signal_count',    0)}")
+    ln(f"  Sensationalism Score: {ling.get('sensationalism_score', 0)}")
+    ln(f"  Caps Ratio          : {ling.get('caps_ratio', 0)*100:.1f}%")
+    ln(f"  Exclamation Marks   : {ling.get('exclamation_count',    0)}")
+    ln()
+
+    # ── Team & Footer ─────────────────────────────────────────────────────────
+    ln(f"  {_THIN_DIV}")
+    ln("  PROJECT TEAM")
+    ln(f"  {_THIN_DIV}")
+    for dev in DEVELOPERS:
+        ln(f"  {dev['name']:<26} — {dev['role']}")
+    ln()
+    ln(f"  {INSTITUTION}")
+    ln(f"  {BOARD}")
+    ln(f"  {INTERNSHIP}")
+    ln()
+    ln(_DIVIDER)
+    ln("  DISCLAIMER")
+    ln(_DIVIDER)
+    ln("  This report is produced by an AI system for research and")
+    ln("  educational purposes. Always verify with authoritative")
+    ln("  sources before making any decisions based on this report.")
+    ln(_DIVIDER)
+
+    return "\n".join(lines)
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    words   = text.split()
+    lines:  list[str] = []
+    current = ""
+    for w in words:
+        if current and len(current) + 1 + len(w) > width:
+            lines.append(current)
+            current = w
+        else:
+            current = (current + " " + w).strip()
+    if current:
+        lines.append(current)
+    return lines or [""]
 
 
 # ── JSON Export ───────────────────────────────────────────────────────────────
 
-def export_json(result: dict, query_text: str = "") -> str:
+def export_json(result: dict) -> str:
     """
-    Write the full verification result as pretty-printed JSON to a temp file.
-    Returns the file path.
+    Return result as formatted JSON.
+    Non-serialisable objects (numpy arrays etc.) are converted to strings.
     """
+    def _safe(obj: object) -> object:
+        if isinstance(obj, (str, int, float, bool, type(None))):
+            return obj
+        if isinstance(obj, dict):
+            return {k: _safe(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_safe(x) for x in obj]
+        return str(obj)
+
     payload = {
-        "report_meta": {
-            "app":       APP_TITLE,
-            "version":   APP_VERSION,
-            "timestamp": _timestamp(),
-            "developers": _dev_names(),
-            "institution": INSTITUTION,
-        },
-        "query":        query_text or result.get("original_text", ""),
-        "verdict":      result.get("verdict", "UNVERIFIED"),
-        "confidence": {
-            "overall":  result.get("overall_confidence", 0),
-            "ml":       result.get("ml_confidence",      0),
-            "evidence": result.get("evidence_confidence", 0),
-        },
-        "ml": {
-            "model":      result.get("ml_result", {}).get("model_name", "—"),
-            "label":      result.get("ml_result", {}).get("label", "—"),
-            "prob_real":  result.get("ml_result", {}).get("prob_real", 0),
-            "prob_fake":  result.get("ml_result", {}).get("prob_fake", 0),
-        },
-        "keywords":     result.get("keywords", []),
-        "reasoning":    result.get("reasoning", []),
-        "evidence": {
-            "sources_found":         result.get("evidence_result", {}).get("sources_found", 0),
-            "avg_trust_score":       result.get("evidence_result", {}).get("avg_trust_score", 0),
-            "supporting_sources":    result.get("evidence_result", {}).get("supporting_sources", []),
-            "contradicting_sources": result.get("evidence_result", {}).get("contradicting_sources", []),
-            "neutral_sources":       result.get("evidence_result", {}).get("neutral_sources", []),
-            "articles": [
-                {
-                    "title":          a.get("title", ""),
-                    "url":            a.get("url", ""),
-                    "source_name":    a.get("source_name", ""),
-                    "trust_score":    a.get("trust_score", 0),
-                    "classification": a.get("classification", "neutral"),
-                    "date":           a.get("date", ""),
-                }
-                for a in result.get("evidence_result", {}).get("articles", [])[:8]
-            ],
-        },
-        "linguistic": {
-            "fake_signals": result.get("linguistic_signals", {}).get("fake_signal_count", 0),
-            "real_signals": result.get("linguistic_signals", {}).get("real_signal_count", 0),
-            "sensationalism_score": result.get("linguistic_signals", {}).get("sensationalism_score", 0),
-            "caps_ratio":   result.get("linguistic_signals", {}).get("caps_ratio", 0),
-        },
-        "elapsed_seconds": result.get("elapsed_seconds", 0),
+        "report_version":   APP_VERSION,
+        "generated_at":     datetime.now().isoformat(),
+        "institution":      INSTITUTION,
+        "result":           _safe(result),
     }
-
-    fd, path = tempfile.mkstemp(suffix=".json", prefix="fakenews_report_")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-    return path
+    return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
-# ── PDF Export ────────────────────────────────────────────────────────────────
+# ── PDF Export (fpdf2) ────────────────────────────────────────────────────────
 
-def export_pdf(result: dict, query_text: str = "") -> Optional[str]:
+def export_pdf(result: dict) -> Optional[bytes]:  # type: ignore[name-defined]
     """
-    Write a formatted PDF report. Returns file path or None if fpdf2 missing.
-    Falls back to TXT export if fpdf2 is not installed.
+    Generate a PDF forensic report using fpdf2.
+    Returns bytes on success, None if fpdf2 is not installed.
     """
     try:
-        from fpdf import FPDF
+        from fpdf import FPDF  # type: ignore[import]
     except ImportError:
-        return export_txt(result, query_text)
+        logger.warning("fpdf2 not installed — PDF export unavailable.")
+        return None
 
-    verdict  = result.get("verdict", "UNVERIFIED")
-    overall  = result.get("overall_confidence", 0)
-    ml_conf  = result.get("ml_confidence", 0)
-    ev_conf  = result.get("evidence_confidence", 0)
-    elapsed  = result.get("elapsed_seconds", 0)
-    ml_name  = result.get("ml_result", {}).get("model_name", "—")
-    keywords = result.get("keywords", [])
-    reasoning = result.get("reasoning", [])
-    articles  = result.get("evidence_result", {}).get("articles", [])
-    sources   = result.get("evidence_result", {}).get("sources_found", 0)
+    try:
+        verdict  = result.get("verdict", "UNVERIFIED")
+        v_label  = _verdict_label(verdict)
+        v_icon   = _verdict_icon(verdict)
+        ml_res   = result.get("ml_result",       {})
+        ev_res   = result.get("evidence_result", {})
+        vf       = result.get("verified_fact",   {})
+        ts       = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
 
-    VERDICT_COLORS = {
-        "REAL":       (34, 197, 94),
-        "FAKE":       (239, 68, 68),
-        "UNVERIFIED": (234, 179, 8),
-    }
-    color = VERDICT_COLORS.get(verdict, (107, 114, 128))
+        # Strip emojis for PDF (PDF basic fonts don't support Unicode emoji)
+        def _strip_emoji(s: str) -> str:
+            return re.sub(r"[^\x00-\x7F]", "", s).strip()
 
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    F = EXPORT_PDF_FONT
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
 
-    # Header band
-    pdf.set_fill_color(15, 23, 42)
-    pdf.rect(0, 0, 210, 32, "F")
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font(F, "B", 14)
-    pdf.set_xy(10, 8)
-    pdf.cell(0, 7, APP_TITLE, ln=True)
-    pdf.set_font(F, "", 9)
-    pdf.set_x(10)
-    pdf.cell(0, 5, f"Version {APP_VERSION}  |  {INSTITUTION}  |  {_timestamp()}", ln=True)
-    pdf.set_x(10)
-    pdf.cell(0, 5, f"Developed by: {_dev_names()}", ln=True)
-    pdf.set_text_color(0, 0, 0)
-
-    pdf.ln(6)
-
-    def section(title: str) -> None:
-        pdf.set_font(F, "B", 10)
-        pdf.set_fill_color(241, 245, 249)
-        pdf.set_text_color(30, 41, 59)
-        pdf.cell(0, 7, f"  {title}", ln=True, fill=True)
-        pdf.set_text_color(0, 0, 0)
-        pdf.ln(1)
-
-    def body(text: str, indent: int = 8) -> None:
-        pdf.set_font(F, "", 9)
-        pdf.set_x(indent)
-        pdf.multi_cell(0, 5, _safe_text(text, 500))
-
-    # Query
-    section("QUERY")
-    body(query_text or result.get("original_text", ""))
-    pdf.ln(3)
-
-    # Verdict box
-    section("VERDICT")
-    pdf.set_fill_color(*color)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font(F, "B", 16)
-    pdf.set_x(8)
-    label = {"REAL": "REAL — Likely Credible",
-             "FAKE": "FAKE — Likely Misinformation"}.get(verdict, "UNVERIFIED")
-    pdf.cell(0, 12, f"  {label}", ln=True, fill=True)
-    pdf.set_text_color(0, 0, 0)
-    pdf.ln(2)
-
-    pdf.set_font(F, "", 9)
-    for label_, val in [
-        (f"Overall Confidence", f"{overall}%"),
-        (f"ML Confidence [{ml_name}]", f"{ml_conf}%"),
-        (f"Evidence Confidence [{sources} sources]", f"{ev_conf}%"),
-        (f"Analysis Time", f"{elapsed}s"),
-    ]:
-        pdf.set_x(8)
-        pdf.set_font(F, "B", 9)
-        pdf.cell(80, 5, label_, border=0)
-        pdf.set_font(F, "", 9)
-        pdf.cell(0, 5, val, ln=True)
-    pdf.ln(3)
-
-    # Reasoning
-    section("AI REASONING")
-    for i, r in enumerate(reasoning, 1):
-        body(f"{i}. {r}")
-    pdf.ln(3)
-
-    # Keywords
-    if keywords:
-        section("KEYWORDS DETECTED")
-        body(", ".join(keywords))
+        # ── Header ────────────────────────────────────────────────────────────
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.cell(0, 8, "AI Fake News Detection Report — V5", ln=True, align="C")
+        pdf.set_font("Helvetica", "", 8)
+        pdf.cell(0, 5, f"{INSTITUTION}  |  {BOARD}", ln=True, align="C")
+        pdf.cell(0, 5, f"Generated: {ts}", ln=True, align="C")
         pdf.ln(3)
+        pdf.set_draw_color(100, 100, 100)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(4)
 
-    # Evidence sources
-    if articles:
-        section("EVIDENCE SOURCES")
-        for a in articles[:6]:
-            cls  = a.get("classification", "neutral").upper()
-            name = a.get("source_name", "Unknown")
-            ts   = a.get("trust_score", 0)
-            titl = a.get("title", "")[:100]
-            url  = a.get("url", "")[:100]
-
-            cls_color = {
-                "SUPPORTING":    (34, 197, 94),
-                "CONTRADICTING": (239, 68, 68),
-            }.get(cls, (107, 114, 128))
-
-            pdf.set_x(8)
-            pdf.set_fill_color(*cls_color)
-            pdf.set_text_color(255, 255, 255)
-            pdf.set_font(F, "B", 8)
-            pdf.cell(28, 5, f" {cls}", fill=True)
-            pdf.set_text_color(0, 0, 0)
-            pdf.set_font(F, "", 9)
-            pdf.cell(0, 5, f"  {name}  (Trust: {ts}/100)", ln=True)
-            body(titl)
-            pdf.set_x(8)
-            pdf.set_font(F, "I", 8)
-            pdf.set_text_color(59, 130, 246)
-            pdf.cell(0, 5, url, ln=True)
-            pdf.set_text_color(0, 0, 0)
+        def _section(title: str) -> None:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_fill_color(240, 240, 240)
+            pdf.cell(0, 6, f"  {title}", ln=True, fill=True)
+            pdf.set_font("Helvetica", "", 9)
             pdf.ln(1)
+
+        def _row(label: str, value: str) -> None:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.cell(45, 5, f"  {label}:", ln=False)
+            pdf.set_font("Helvetica", "", 9)
+            value_clean = _strip_emoji(str(value))[:90]
+            pdf.multi_cell(0, 5, value_clean)
+
+        def _bullet(text: str) -> None:
+            pdf.set_font("Helvetica", "", 9)
+            clean = _strip_emoji(text)[:110]
+            pdf.cell(5, 5, "", ln=False)
+            pdf.multi_cell(0, 5, f"* {clean}")
+
+        # ── Verdict ───────────────────────────────────────────────────────────
+        _section("VERDICT")
+        _row("Result",   v_label)
+        _row("Score",    f"{result.get('combined_score', 0):+.4f}")
+        _row("Description", result.get("verdict_meta", {}).get("description", ""))
         pdf.ln(2)
 
-    # Footer
-    pdf.set_fill_color(241, 245, 249)
-    pdf.rect(0, pdf.get_y(), 210, 20, "F")
-    pdf.set_font(F, "I", 8)
-    pdf.set_text_color(100, 100, 100)
-    pdf.set_x(8)
-    pdf.multi_cell(
-        0, 4,
-        "DISCLAIMER: This tool is for educational and research purposes only. "
-        "Always cross-reference with multiple authoritative sources. "
-        f"© {APP_TITLE} — {INSTITUTION}",
-    )
+        # ── Confidence ────────────────────────────────────────────────────────
+        _section("CONFIDENCE SCORES")
+        for label, key in [
+            ("Overall",    "overall_confidence"),
+            ("ML Model",   "ml_confidence"),
+            ("Evidence",   "evidence_confidence"),
+            ("Linguistic", "linguistic_confidence"),
+            ("Fact",       "fact_confidence"),
+        ]:
+            pct = result.get(key, 0)
+            _row(label, f"{pct}%")
+        pdf.ln(2)
 
-    fd, path = tempfile.mkstemp(suffix=".pdf", prefix="fakenews_report_")
-    os.close(fd)
-    pdf.output(path)
-    return path
+        # ── Claim ─────────────────────────────────────────────────────────────
+        _section("CLAIM")
+        _row("Claim", result.get("primary_claim", "")[:120])
+        pdf.ln(2)
+
+        # ── ML ────────────────────────────────────────────────────────────────
+        _section("ML ANALYSIS")
+        _row("Model",      ml_res.get("model_name", "—"))
+        _row("Prediction", ml_res.get("label",      "—"))
+        _row("Prob Real",  f"{ml_res.get('prob_real', 0)*100:.1f}%")
+        _row("Prob Fake",  f"{ml_res.get('prob_fake', 0)*100:.1f}%")
+        pdf.ln(2)
+
+        # ── Verified Fact ─────────────────────────────────────────────────────
+        _section("VERIFIED FACT")
+        _row("Status",    vf.get("type", "insufficient").upper())
+        _row("Summary",   vf.get("summary", "")[:200])
+        if vf.get("official_source"):
+            _row("Source", vf.get("official_source", ""))
+        if vf.get("official_url"):
+            _row("URL",    vf.get("official_url", "")[:80])
+        pdf.ln(2)
+
+        # ── Evidence ─────────────────────────────────────────────────────────
+        _section("EVIDENCE")
+        _row("Trusted Sources",  str(ev_res.get("sources_found", 0)))
+        _row("Evidence Score",   f"{ev_res.get('evidence_score', 0):+.4f}")
+        _row("Avg Trust",        f"{ev_res.get('avg_trust_score', 0)}/100")
+        sup = ", ".join(ev_res.get("supporting_sources",    [])[:3])
+        con = ", ".join(ev_res.get("contradicting_sources", [])[:3])
+        if sup:
+            _row("Supporting",   sup)
+        if con:
+            _row("Contradicting", con)
+        pdf.ln(2)
+
+        # ── Reasoning ────────────────────────────────────────────────────────
+        _section("REASONING")
+        for item in result.get("reasoning", []):
+            _bullet(item)
+        pdf.ln(2)
+
+        # ── Footer ────────────────────────────────────────────────────────────
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.cell(0, 4,
+            "This report is produced by an AI system for research/educational "
+            "purposes only. Verify with authoritative sources before any decision.",
+            ln=True, align="C",
+        )
+
+        return bytes(pdf.output())
+
+    except Exception as exc:
+        logger.error("PDF export failed: %s", exc)
+        return None
 
 
-# ── Formatted Report String (for Copy button) ────────────────────────────────
+# ── Filename Helpers ──────────────────────────────────────────────────────────
 
-def format_report_text(result: dict, query_text: str = "") -> str:
-    """Return a clean multi-line report string for clipboard copying."""
-    verdict  = result.get("verdict", "UNVERIFIED")
-    overall  = result.get("overall_confidence", 0)
-    ml_conf  = result.get("ml_confidence", 0)
-    ev_conf  = result.get("evidence_confidence", 0)
-    ml_name  = result.get("ml_result", {}).get("model_name", "—")
-    elapsed  = result.get("elapsed_seconds", 0)
-    keywords = result.get("keywords", [])
-    reasoning = result.get("reasoning", [])
-    sources  = result.get("evidence_result", {}).get("sources_found", 0)
-    articles = result.get("evidence_result", {}).get("articles", [])
-
-    lines = [
-        f"{'='*60}",
-        f"AI FAKE NEWS DETECTION REPORT — {_timestamp()}",
-        f"{'='*60}",
-        f"",
-        f"QUERY: {_safe_text(query_text or result.get('original_text',''), 200)}",
-        f"",
-        f"VERDICT: {_verdict_label(verdict)}",
-        f"Overall Confidence  : {overall}%",
-        f"ML Confidence       : {ml_conf}%  [{ml_name}]",
-        f"Evidence Confidence : {ev_conf}%  [{sources} source(s)]",
-        f"Analysis Time       : {elapsed}s",
-        f"",
-        f"{'─'*60}",
-        f"AI REASONING:",
-        f"{'─'*60}",
-    ]
-    for i, r in enumerate(reasoning, 1):
-        lines.append(f"{i}. {r}")
-
-    if keywords:
-        lines += ["", f"KEYWORDS: {', '.join(keywords)}"]
-
-    if articles:
-        lines += ["", f"{'─'*60}", "EVIDENCE SOURCES:", f"{'─'*60}"]
-        for a in articles[:5]:
-            cls  = a.get("classification", "neutral").upper()
-            name = a.get("source_name", "")
-            ts   = a.get("trust_score", 0)
-            titl = a.get("title", "")[:100]
-            url  = a.get("url", "")
-            lines += [f"[{cls}] {name} (Trust: {ts}/100)", f"  {titl}", f"  {url}", ""]
-
-    lines += [
-        f"{'='*60}",
-        f"Developed by: {_dev_names()} | {INSTITUTION}",
-        f"{'='*60}",
-    ]
-    return "\n".join(lines)
+def report_filename(verdict: str, ext: str) -> str:
+    """Generate a safe, timestamped filename for the report."""
+    ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe  = re.sub(r"[^a-zA-Z0-9_]", "_", verdict.lower())
+    return f"fnd_report_{safe}_{ts}.{ext}"

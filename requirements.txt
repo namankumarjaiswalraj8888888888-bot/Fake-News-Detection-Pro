@@ -1,15 +1,16 @@
-# AI Fake News Detection & Live Verification System — Version 4
+# AI Fake News Detection & Live Verification System — Version 5
 # Government Polytechnic West Champaran -- AI & ML Internship 2026
-# Developed by: Naman Kumar & Parmeshwar
+# Developed by: Naman Kumar, Parmeshwar Kumar, Amit Kumar,
+#               Prince Kumar Chaurasiya, Dhiraj Kumar, MD. Tausim Akhtar
 
-# Core ML dependencies
+# Core ML
 scikit-learn>=1.4.0,<2.0.0
 numpy>=1.26.0,<3.0.0
 pandas>=2.1.0,<4.0.0
 
-# Gradio 5.x (4.44.0 has a known HfFolder import bug with newer huggingface_hub)
+# Gradio 5.x (4.44.0 has a known HfFolder import bug)
 gradio>=5.0.0,<6.0.0
 huggingface_hub>=0.24.0,<2.0.0
 
-# PDF export (pure Python, no system-level dependencies)
+# PDF export (optional — gracefully skipped if absent)
 fpdf2>=2.7.0,<3.0.0
