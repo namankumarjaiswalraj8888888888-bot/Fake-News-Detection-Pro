@@ -24,6 +24,37 @@ from __future__ import annotations
 import re
 
 
+# ── Keyword Matching Helper ───────────────────────────────────────────────────
+# BUG FIX V5.1: every keyword/phrase list below (FAKE_LINGUISTIC_SIGNALS,
+# REAL_LINGUISTIC_SIGNALS, CONTRADICTION_KEYWORDS, SUPPORT_KEYWORDS) used to be
+# matched with plain substring checks (`if kw in text`). This meant short
+# keywords could silently false-trigger inside unrelated longer words —
+# e.g. "myth" (a contradiction keyword) matches inside "mythology" or
+# "myth-busting", and "isro" (a real-news signal) matches inside "misrouted".
+# A genuinely unrelated article about Indian mythology could get wrongly
+# classified as contradicting a claim, polluting the evidence score.
+#
+# Fix: every keyword is now wrapped in \b...\b word-boundary regex, so it only
+# matches whole words/phrases, never as a substring of something longer.
+# Multi-word phrases (e.g. "share before deleted") still work correctly since
+# \b applies at the start of the first word and the end of the last word.
+def compile_keyword_patterns(keywords) -> list[tuple[str, re.Pattern]]:
+    """
+    Compile a list of keyword/phrase strings into (keyword, word-boundary
+    regex pattern) pairs, case-insensitive. Returned patterns should be
+    matched with `pattern.search(text)`, not `keyword in text`.
+    """
+    return [
+        (kw, re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE))
+        for kw in keywords
+    ]
+
+
+def find_keyword_hits(text: str, compiled_patterns: list[tuple[str, re.Pattern]]) -> list[str]:
+    """Return the list of original keyword strings whose pattern matched text."""
+    return [kw for kw, pat in compiled_patterns if pat.search(text)]
+
+
 # ── Nine-Verdict Metadata ─────────────────────────────────────────────────────
 # Used by utils.py (decision engine) and app.py (HTML renderer).
 
@@ -207,21 +238,40 @@ REAL_LINGUISTIC_SIGNALS: list[str] = [
     "ministry of health", "isro", "nasa", "who confirmed",
 ]
 
+# Pre-compiled word-boundary patterns — see compile_keyword_patterns() docstring
+# above for why plain substring matching (`kw in text`) was unsafe.
+FAKE_LINGUISTIC_SIGNALS_COMPILED = compile_keyword_patterns(FAKE_LINGUISTIC_SIGNALS)
+REAL_LINGUISTIC_SIGNALS_COMPILED = compile_keyword_patterns(REAL_LINGUISTIC_SIGNALS)
+
 SENSATIONALISM_PATTERNS: list[str] = [
     r"\b(shocking|explosive|bombshell|unbelievable|mind-blowing|terrifying)\b",
     r"\b(100\s*%|guaranteed|completely|absolutely)\b",
     r"!!+",
     r"\b(urgent|breaking|alert|must\s+read|viral)\b",
-    r"[A-Z]{5,}",
     r"\b(secret|hidden|suppressed|leaked|banned)\b",
     r"\b(they|government|elites?)\s+(are\s+)?(hiding|suppressing|don't\s+want)\b",
     r"\b(share|forward)\s+(before|now|immediately)\b",
 ]
 
-# Compiled regex for performance
+# Compiled regex for performance — these are matched case-insensitively against
+# already-lowercased text (so "SHOCKING" and "shocking" both match the same way).
 _SENSATIONALISM_COMPILED: list[re.Pattern] = [
     re.compile(p, re.IGNORECASE) for p in SENSATIONALISM_PATTERNS
 ]
+
+# ── ALL-CAPS "Shouting" Detection ─────────────────────────────────────────────
+# BUG FIX V5.1: this used to live inside SENSATIONALISM_PATTERNS as r"[A-Z]{5,}"
+# compiled with re.IGNORECASE — but analyze_linguistic_signals() in utils.py
+# evaluates patterns against text.lower(), so an IGNORECASE [A-Z]{5,} pattern
+# could never see real uppercase letters and instead matched ANY word of 5+
+# letters (case-insensitively), wrongly flagging ordinary text like
+# "successfully", "missions", "government" as "sensationalism".
+#
+# Fix: keep caps-detection as its own pattern, compiled WITHOUT IGNORECASE,
+# and always run it against the ORIGINAL-CASE text (never lowercased).
+# A real run of 5+ consecutive uppercase letters (e.g. "URGENT", "SHOCKING")
+# is a genuine shouting signal; a long lowercase word is not.
+CAPS_SHOUTING_PATTERN: re.Pattern = re.compile(r"\b[A-Z]{5,}\b")
 
 
 # ── Clickbait Patterns ────────────────────────────────────────────────────────
@@ -405,6 +455,12 @@ SUPPORT_KEYWORDS: tuple[str, ...] = (
     "government confirms", "rbi confirms", "isro confirms",
     "authenticated", "legitimate", "accurate",
 )
+
+# Pre-compiled word-boundary patterns — see compile_keyword_patterns() docstring
+# near the top of this file for why plain substring matching (`kw in text`)
+# was unsafe (e.g. "myth" matching inside "mythology").
+CONTRADICTION_KEYWORDS_COMPILED = compile_keyword_patterns(CONTRADICTION_KEYWORDS)
+SUPPORT_KEYWORDS_COMPILED       = compile_keyword_patterns(SUPPORT_KEYWORDS)
 
 
 # ── Stopwords ────────────────────────────────────────────────────────────────

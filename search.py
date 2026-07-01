@@ -61,8 +61,9 @@ from config import (
 )
 from constants import (
     TRUSTED_SOURCES, FACT_CHECK_DOMAINS,
-    CONTRADICTION_KEYWORDS, SUPPORT_KEYWORDS,
+    CONTRADICTION_KEYWORDS_COMPILED, SUPPORT_KEYWORDS_COMPILED,
     SPAM_DOMAINS, AI_BLOG_SIGNALS, CLICKBAIT_COMPILED,
+    find_keyword_hits,
 )
 
 logger = logging.getLogger(__name__)
@@ -643,19 +644,26 @@ def _classify_result(result: dict, original_query: str) -> str:
     treated as at minimum 'neutral' even if no contradiction keyword matches —
     the fact that a fact-check site covers the topic is informative.
     If the snippet contains contradiction keywords → 'contradicting'.
+
+    BUG FIX V5.1: keyword checks now use word-boundary regex (via
+    CONTRADICTION_KEYWORDS_COMPILED / SUPPORT_KEYWORDS_COMPILED) instead of
+    plain substring checks. Plain substring checks let short keywords
+    false-trigger inside unrelated longer words — e.g. "myth" (a
+    contradiction keyword) used to match inside "mythology", which could
+    wrongly classify a totally unrelated REAL article as contradicting a
+    claim and pollute the evidence score.
     """
     combined = (result.get("title", "") + " " + result.get("snippet", "")).lower()
     domain   = _extract_domain(result.get("url", ""))
     is_fc    = _is_fact_check(domain)
 
     # Contradiction keyword check (applies to all sources)
-    for kw in CONTRADICTION_KEYWORDS:
-        if kw in combined:
-            return "contradicting"
+    if find_keyword_hits(combined, CONTRADICTION_KEYWORDS_COMPILED):
+        return "contradicting"
 
     # Support keyword check (with query overlap filter)
-    for kw in SUPPORT_KEYWORDS:
-        if kw in combined:
+    for kw, pat in SUPPORT_KEYWORDS_COMPILED:
+        if pat.search(combined):
             q_words = set(re.findall(r"\b\w{4,}\b", original_query.lower()))
             r_words = set(re.findall(r"\b\w{4,}\b", combined))
             if len(q_words & r_words) >= 2:

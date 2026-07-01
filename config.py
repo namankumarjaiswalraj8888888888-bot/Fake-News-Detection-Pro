@@ -30,8 +30,8 @@ from __future__ import annotations
 # ── Application Metadata ──────────────────────────────────────────────────────
 
 APP_TITLE      = "AI Fake News Detection & Live Verification"
-APP_VERSION    = "5.0"
-APP_TAGLINE    = "9-Verdict System · Multi-source Evidence · ML Classification"
+APP_VERSION    = "5.1"
+APP_TAGLINE    = "9-Verdict System · Live Evidence · ML Classification · Verified Facts"
 INSTITUTION    = "Government Polytechnic West Champaran"
 DEPARTMENT     = "Department of Computer Science & Engineering"
 BOARD          = "SBTE Bihar · Diploma Engineering · Session 2025–2028"
@@ -40,40 +40,153 @@ COPYRIGHT_YEAR = "2026"
 
 DEVELOPERS: list[dict] = [
     {
+        "id":     "naman-kumar",
         "name":   "Naman Kumar",
         "role":   "Full Stack AI Developer · UI/UX Designer",
         "badge":  "Project Lead",
-        "avatar": "NK",
+        "icon":   "compass",
+        "bio": (
+            "Project lead and primary architect of the AI Fake News Detection "
+            "& Live Verification System. Naman designed the end-to-end "
+            "verification pipeline — from the live-evidence search layer "
+            "through the ML classifier to the 9-verdict scoring engine — and "
+            "led the UI/UX direction for the full forensic-dossier interface, "
+            "including the bilingual (English/Hindi) experience and the "
+            "dark/light theming system. Drawn to projects that sit at the "
+            "intersection of applied machine learning and interface design: "
+            "building tools that don't just compute an answer, but make the "
+            "reasoning behind it legible to the person using it."
+        ),
+        "skills": [
+            "Python", "Gradio", "scikit-learn", "System Architecture",
+            "UI/UX Design", "REST APIs", "Git/GitHub", "Product Thinking",
+        ],
+        "contributions": [
+            "Designed the 9-verdict decision engine and confidence-weighting system",
+            "Built the live multi-source evidence verification pipeline",
+            "Led the full UI/UX redesign, including bilingual and dark/light theming",
+            "Coordinated the team and owns the project roadmap",
+        ],
+        "quote": "A verdict only earns trust if you can see how it was reached.",
     },
     {
+        "id":     "parmeshwar-kumar",
         "name":   "Parmeshwar Kumar",
         "role":   "Backend Developer · API Integration",
         "badge":  "Backend",
-        "avatar": "PK",
+        "icon":   "server",
+        "bio": (
+            "Backend developer responsible for the live evidence-search "
+            "integration layer — wiring together multiple news and "
+            "fact-check sources into a single reliable pipeline, with "
+            "retry handling and graceful degradation when sources are "
+            "unavailable. Focused on making the system resilient under "
+            "real-world network conditions, not just in the happy path."
+        ),
+        "skills": [
+            "Python", "REST APIs", "HTTP/Networking", "Error Handling",
+            "Caching", "Concurrency",
+        ],
+        "contributions": [
+            "Integrated live search across multiple news and fact-check sources",
+            "Implemented retry logic and timeout handling for external requests",
+            "Built the source caching layer to reduce redundant lookups",
+        ],
+        "quote": "A system is only as trustworthy as how it fails.",
     },
     {
+        "id":     "amit-kumar",
         "name":   "Amit Kumar",
         "role":   "ML Engineer · Dataset & Model Training",
         "badge":  "ML / AI",
-        "avatar": "AK",
+        "icon":   "flask",
+        "bio": (
+            "ML engineer who built and trained the text-classification "
+            "model at the core of the system — from dataset preparation "
+            "and feature engineering (TF-IDF vectorization) through to "
+            "model selection and evaluation. Focused on keeping the "
+            "classifier interpretable enough that its confidence scores "
+            "mean something, rather than chasing accuracy alone."
+        ),
+        "skills": [
+            "scikit-learn", "Pandas", "NumPy", "TF-IDF / NLP",
+            "Model Evaluation", "Feature Engineering",
+        ],
+        "contributions": [
+            "Trained and tuned the Multinomial Naive Bayes classifier",
+            "Built the TF-IDF vectorization pipeline",
+            "Ran model evaluation and selection across candidate algorithms",
+        ],
+        "quote": "A confidence score is a promise. We tested it to keep that promise honest.",
     },
     {
+        "id":     "prince-kumar-chaurasiya",
         "name":   "Prince Kumar Chaurasiya",
         "role":   "Research & Documentation Lead",
         "badge":  "Research",
-        "avatar": "PC",
+        "icon":   "book-open",
+        "bio": (
+            "Led research into misinformation patterns and credibility "
+            "signals that shaped the system's linguistic-analysis rules, "
+            "and authored the project's technical documentation — keeping "
+            "the team's design decisions, trade-offs, and verdict "
+            "definitions clearly recorded for review and future "
+            "maintenance."
+        ),
+        "skills": [
+            "Technical Writing", "Research", "Misinformation Studies",
+            "Documentation", "Requirements Analysis",
+        ],
+        "contributions": [
+            "Researched linguistic credibility and misinformation markers",
+            "Authored the project's technical and user documentation",
+            "Defined the 9-verdict taxonomy used by the scoring engine",
+        ],
+        "quote": "Good documentation is how a project keeps its promises after launch.",
     },
     {
+        "id":     "dhiraj-kumar",
         "name":   "Dhiraj Kumar",
         "role":   "QA Engineer · Performance Testing",
         "badge":  "QA",
-        "avatar": "DK",
+        "icon":   "shield-check",
+        "bio": (
+            "QA engineer responsible for testing the verification pipeline "
+            "end-to-end — covering edge cases in claim text, malformed "
+            "inputs, and network failure scenarios — and for performance "
+            "testing under load to keep response times predictable."
+        ),
+        "skills": [
+            "Manual & Exploratory Testing", "Edge Case Analysis",
+            "Performance Testing", "Bug Triage",
+        ],
+        "contributions": [
+            "Tested the verification pipeline across edge cases and malformed inputs",
+            "Ran performance testing on the search and scoring pipeline",
+            "Triaged and tracked bugs across development cycles",
+        ],
+        "quote": "If it isn't tested against the weird input, it isn't tested.",
     },
     {
+        "id":     "md-tausim-akhtar",
         "name":   "MD. Tausim Akhtar",
         "role":   "AI Research Contributor",
         "badge":  "Research",
-        "avatar": "MT",
+        "icon":   "lightbulb",
+        "bio": (
+            "Contributed research into evidence-weighting approaches and "
+            "supported evaluation of the decision-scoring logic, helping "
+            "validate how ML confidence, live evidence, and linguistic "
+            "signals should be balanced in the final verdict."
+        ),
+        "skills": [
+            "AI Research", "Data Analysis", "Evaluation Design",
+        ],
+        "contributions": [
+            "Researched evidence-weighting strategies for the scoring engine",
+            "Supported evaluation of verdict accuracy across sample cases",
+        ],
+        "quote": "Weighing evidence well matters more than weighing it fast.",
     },
 ]
 

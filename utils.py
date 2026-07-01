@@ -51,9 +51,13 @@ from config import (
 from constants import (
     FAKE_LINGUISTIC_SIGNALS,
     REAL_LINGUISTIC_SIGNALS,
+    FAKE_LINGUISTIC_SIGNALS_COMPILED,
+    REAL_LINGUISTIC_SIGNALS_COMPILED,
     SENSATIONALISM_PATTERNS,
+    CAPS_SHOUTING_PATTERN,
     STOPWORDS,
     VERDICT_META,
+    find_keyword_hits,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,12 +166,26 @@ def analyze_linguistic_signals(text: str) -> dict:
     """
     Scan raw text for misinformation and credibility markers.
     Returns counts, signal lists, sensationalism score, caps ratio, etc.
+
+    BUG FIX V5.1: sensationalism_score now correctly separates two signals:
+      1. Sensational PHRASES (e.g. "shocking", "guaranteed") — matched
+         case-insensitively against lowercased text via _SEN_PATTERNS.
+      2. ALL-CAPS SHOUTING (e.g. "URGENT", "SHOCKING") — matched
+         case-SENSITIVELY against the ORIGINAL-case text via
+         CAPS_SHOUTING_PATTERN. Previously this was folded into
+         _SEN_PATTERNS as an IGNORECASE [A-Z]{5,} pattern run against
+         already-lowercased text, which meant it could never see real
+         capitals and instead matched any 5+ letter word — silently
+         inflating sensationalism_score on completely normal text.
     """
     t          = text.lower()
-    fake_hits  = [kw for kw in FAKE_LINGUISTIC_SIGNALS if kw in t]
-    real_hits  = [kw for kw in REAL_LINGUISTIC_SIGNALS if kw in t]
+    fake_hits  = find_keyword_hits(t, FAKE_LINGUISTIC_SIGNALS_COMPILED)
+    real_hits  = find_keyword_hits(t, REAL_LINGUISTIC_SIGNALS_COMPILED)
 
-    sensationalism = sum(len(p.findall(t)) for p in _SEN_PATTERNS)
+    phrase_sensationalism = sum(len(p.findall(t)) for p in _SEN_PATTERNS)
+    caps_shouting_count    = len(CAPS_SHOUTING_PATTERN.findall(text))   # original case
+    sensationalism         = phrase_sensationalism + caps_shouting_count
+
     caps_ratio     = sum(1 for c in text if c.isupper()) / max(len(text), 1)
     exclamation    = text.count("!")
     question       = text.count("?")
@@ -179,6 +197,7 @@ def analyze_linguistic_signals(text: str) -> dict:
         "fake_signals_found":   fake_hits[:5],
         "real_signals_found":   real_hits[:5],
         "sensationalism_score": sensationalism,
+        "caps_shouting_count":  caps_shouting_count,
         "caps_ratio":           round(caps_ratio, 4),
         "exclamation_count":    exclamation,
         "question_count":       question,

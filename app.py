@@ -1,30 +1,20 @@
 """
 app.py
 ======
-Version 5 — Production Gradio UI for AI Fake News Detection System.
+Version 5.1 — Gradio UI for the AI Fake News Detection & Live Verification System.
 
-New in V5
----------
-- 9-Verdict display with unique color, icon, badge for each verdict.
-- Verified Fact panel (verified / debunked / mixed / insufficient).
-- 5 separate confidence bars (Overall, ML, Evidence, Linguistic, Fact).
-- Rich Source Cards with Trust badge, classification badge, Open Source button.
-- Skeleton loading animation with live step indicators.
-- Complete History panel (view, search, delete entry, export all).
-- Export panel: TXT and JSON report download; PDF if fpdf2 installed.
-- Dark / Light / System theme toggle (CSS var-based, no JS required).
-- Fully responsive layout — tested at 380px, 480px, 640px, 768px, 1024px.
-- HTML injection / XSS prevention on all user-supplied strings.
-- Beautiful error card with retry hint.
-- Project team section with all 6 members and institution footer.
+New in 5.1
+----------
+- Forensic-dossier UI redesign (Source Serif 4 · Inter · JetBrains Mono)
+- Dark / light mode: @media prefers-color-scheme auto + manual toggle
+- English / Hindi language toggle (both langs pre-rendered, JS visibility swap)
+- SVG evidence-gauge with animated sweep needle
+- Interactive team profile modals (click name → full biodata popup)
+- word-boundary keyword-matching bugs fixed in utils.py / search.py
+- Sensationalism regex bug fixed in constants.py / utils.py
+- model.pkl + vectorizer.pkl verified and wired
 
-Backward compatibility
-----------------------
-- check_news() API unchanged.
-- All V4 sample news entries preserved (5 samples).
-- PDF export preserved; gracefully falls back if fpdf2 absent.
-
-AI Fake News Detection & Live Verification System — Version 5
+AI Fake News Detection & Live Verification System — Version 5.1
 Government Polytechnic West Champaran — AI & ML Internship 2026
 Developed by: Naman Kumar, Parmeshwar Kumar, Amit Kumar,
               Prince Kumar Chaurasiya, Dhiraj Kumar, MD. Tausim Akhtar
@@ -40,481 +30,584 @@ import tempfile
 import gradio as gr
 
 from config import (
-    APP_TITLE, APP_VERSION,
+    APP_TITLE, APP_VERSION, APP_TAGLINE,
     INSTITUTION, BOARD, INTERNSHIP,
-    SERVER_HOST, SERVER_PORT, SERVER_SHARE, SERVER_SHOW_ERROR,
     DEVELOPERS,
+    SERVER_HOST, SERVER_PORT, SERVER_SHARE, SERVER_SHOW_ERROR,
 )
 from constants import SAMPLE_NEWS, VERDICT_META
-from styles import get_css
+from styles   import get_css
 from fact_checker import check_news
-from export import export_txt, export_json, export_pdf, report_filename
-from history import history as _history
+from export   import export_txt, export_json, export_pdf, report_filename
+from history  import history as _history
+from i18n_strings import (
+    STATIC_UI, VERDICT_LABELS_HI, VERDICT_DESCRIPTIONS_HI,
+    EVIDENCE_LABELS_HI, TEAM_HI,
+)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+# ── Singleton to hold the last result for export ──────────────────────────────
+_last_result: dict | None = None
 
-# ── Security: sanitise all user content before embedding in HTML ──────────────
 
+# ── Tiny helpers ──────────────────────────────────────────────────────────────
 def _esc(s: object) -> str:
-    return html.escape(str(s))
+    return html.escape(str(s)) if s else ""
 
 
-# ── Verdict CSS class lookup ──────────────────────────────────────────────────
+def _si(key: str, lang_attr: str = "") -> str:
+    """Return both EN and HI versions of a static UI string as pre-rendered spans."""
+    entry = STATIC_UI.get(key, {"en": key, "hi": key})
+    return (
+        f'<span class="en">{_esc(entry["en"])}</span>'
+        f'<span class="hi">{_esc(entry["hi"])}</span>'
+    )
 
+
+# ── Verdict CSS class map ──────────────────────────────────────────────────────
 _VERDICT_CSS: dict[str, str] = {
-    "REAL":                  "fnd-verdict-real",
-    "LIKELY REAL":           "fnd-verdict-likely-real",
-    "PARTIALLY TRUE":        "fnd-verdict-partial",
-    "UNVERIFIED":            "fnd-verdict-unv",
-    "INSUFFICIENT EVIDENCE": "fnd-verdict-insuff",
-    "MIXED":                 "fnd-verdict-mixed",
-    "MISLEADING":            "fnd-verdict-misleading",
-    "LIKELY FAKE":           "fnd-verdict-likely-fake",
-    "FAKE":                  "fnd-verdict-fake",
+    "REAL":                  "fnd-v-real",
+    "LIKELY REAL":           "fnd-v-lreal",
+    "PARTIALLY TRUE":        "fnd-v-partial",
+    "UNVERIFIED":            "fnd-v-unv",
+    "INSUFFICIENT EVIDENCE": "fnd-v-insuff",
+    "MIXED":                 "fnd-v-mixed",
+    "MISLEADING":            "fnd-v-mislead",
+    "LIKELY FAKE":           "fnd-v-lfake",
+    "FAKE":                  "fnd-v-fake",
 }
 
-_BAR_CSS: dict[str, str] = {
-    "REAL":                  "bar-real",
-    "LIKELY REAL":           "bar-likely-real",
-    "PARTIALLY TRUE":        "bar-partial",
-    "UNVERIFIED":            "bar-unv",
-    "INSUFFICIENT EVIDENCE": "bar-insuff",
-    "MIXED":                 "bar-mixed",
-    "MISLEADING":            "bar-misleading",
-    "LIKELY FAKE":           "bar-likely-fake",
-    "FAKE":                  "bar-fake",
-}
-
-_HIST_COLORS: dict[str, str] = {
-    "REAL":                  "#059669",
-    "LIKELY REAL":           "#10b981",
-    "PARTIALLY TRUE":        "#0891b2",
-    "UNVERIFIED":            "#d97706",
-    "INSUFFICIENT EVIDENCE": "#94a3b8",
-    "MIXED":                 "#d97706",
-    "MISLEADING":            "#ea580c",
-    "LIKELY FAKE":           "#dc6803",
-    "FAKE":                  "#dc2626",
+# ── Lucide-style inline SVG icons ─────────────────────────────────────────────
+_ICONS: dict[str, str] = {
+    "compass": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>',
+    "server":  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>',
+    "flask":   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v5l-3.5 6a4 4 0 0 0 3.5 6h4a4 4 0 0 0 3.5-6L14 8V3"/><path d="M6.5 14.5h11"/></svg>',
+    "book-open": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
+    "shield-check": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>',
+    "lightbulb": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21h6"/><path d="M12 3a6 6 0 0 1 6 6c0 2.2-1.2 4.2-3 5.4V18H9v-3.6A6 6 0 0 1 6 9a6 6 0 0 1 6-6z"/></svg>',
+    "magnify": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    "moon":    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+    "sun":     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
 }
 
 
-# ── HTML Builders ─────────────────────────────────────────────────────────────
+def _icon(name: str, cls: str = "") -> str:
+    svg = _ICONS.get(name, "")
+    if cls:
+        svg = svg.replace("<svg ", f'<svg class="{_esc(cls)}" ', 1)
+    return svg
 
-def _conf_bar_html(label: str, pct: int, bar_cls: str) -> str:
-    w = max(0, min(100, pct))
+
+# ── SVG Evidence Gauge ────────────────────────────────────────────────────────
+def _gauge_svg(combined_score: float, verdict_css: str) -> str:
+    """
+    Semicircular gauge: REAL (left, green) → centre (amber) → FAKE (right, red).
+    combined_score in [-1, +1]; maps to needle angle -90° (left) … +90° (right).
+    The needle animates on reveal via a data-score attribute + inline JS.
+    """
+    # Clamp to [-1, 1]
+    score = max(-1.0, min(1.0, combined_score))
+    # Map [-1, 1] → [-90, 90] degrees (0 deg = straight up = centre)
+    angle = score * 90
+    return f"""
+<div class="fnd-gauge-wrap">
+  <svg class="fnd-gauge-svg" viewBox="0 0 200 110" width="200" height="110"
+       data-score="{score:.4f}" aria-label="Evidence gauge">
+    <!-- Track arc (180° semicircle) -->
+    <defs>
+      <linearGradient id="gauge-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%"   stop-color="var(--verify)"  stop-opacity=".85"/>
+        <stop offset="45%"  stop-color="var(--amber)"   stop-opacity=".75"/>
+        <stop offset="100%" stop-color="var(--flag)"    stop-opacity=".85"/>
+      </linearGradient>
+    </defs>
+    <!-- Background track -->
+    <path d="M 16 100 A 84 84 0 0 1 184 100"
+          fill="none" stroke="var(--line)" stroke-width="10"
+          stroke-linecap="round"/>
+    <!-- Colored track -->
+    <path d="M 16 100 A 84 84 0 0 1 184 100"
+          fill="none" stroke="url(#gauge-grad)" stroke-width="10"
+          stroke-linecap="round" opacity=".6"/>
+    <!-- Tick marks -->
+    <g stroke="var(--line-strong)" stroke-width="1.5" opacity=".7">
+      <line x1="100" y1="18" x2="100" y2="26"/>
+      <line x1="20"  y1="98" x2="28"  y2="95"/>
+      <line x1="180" y1="98" x2="172" y2="95"/>
+      <line x1="43"  y1="38" x2="49"  y2="44"/>
+      <line x1="157" y1="38" x2="151" y2="44"/>
+    </g>
+    <!-- Labels -->
+    <text x="10"  y="110" font-size="9" fill="var(--verify)"
+          font-family="var(--font-mono)" text-anchor="middle">REAL</text>
+    <text x="100" y="14"  font-size="8" fill="var(--amber)"
+          font-family="var(--font-mono)" text-anchor="middle">?</text>
+    <text x="190" y="110" font-size="9" fill="var(--flag)"
+          font-family="var(--font-mono)" text-anchor="middle">FAKE</text>
+    <!-- Needle (animated via JS on load) -->
+    <g class="fnd-gauge-needle" id="gauge-needle"
+       style="transform: rotate({angle:.1f}deg); transform-origin: 100px 100px;">
+      <line x1="100" y1="100" x2="100" y2="26"
+            stroke="var(--ink)" stroke-width="2.5" stroke-linecap="round"/>
+      <circle cx="100" cy="100" r="5" fill="var(--ink)"/>
+      <circle cx="100" cy="100" r="2.5" fill="var(--paper-raised)"/>
+    </g>
+  </svg>
+  <div style="font-family:var(--font-mono);font-size:.68rem;color:var(--ink-soft);margin-top:2px">
+    score: <span style="color:var(--ink)">{combined_score:+.4f}</span>
+  </div>
+</div>"""
+
+
+# ── Confidence bar ─────────────────────────────────────────────────────────────
+def _conf_bar(label_en: str, label_hi: str, pct: int,
+              extra_cls: str = "", i18n_key: str = "") -> str:
+    fill_cls = f"fnd-conf-fill {extra_cls}".strip()
     return f"""
 <div class="fnd-conf-row">
   <div class="fnd-conf-label">
-    <span>{_esc(label)}</span>
-    <span>{w}%</span>
+    <span class="en">{_esc(label_en)}</span>
+    <span class="hi">{_esc(label_hi)}</span>
   </div>
   <div class="fnd-conf-track">
-    <div class="fnd-conf-bar {bar_cls}" style="width:{w}%"></div>
+    <div class="{fill_cls}" style="width:{pct}%" aria-valuenow="{pct}"></div>
   </div>
+  <div class="fnd-conf-pct">{pct}%</div>
 </div>"""
 
 
+# ── Verdict HTML ──────────────────────────────────────────────────────────────
 def _verdict_html(result: dict) -> str:
-    verdict = result.get("verdict", "UNVERIFIED")
-    meta    = VERDICT_META.get(verdict, VERDICT_META["UNVERIFIED"])
-    css_cls = _VERDICT_CSS.get(verdict, "fnd-verdict-unv")
-    bar_cls = _BAR_CSS.get(verdict, "bar-default")
-    elapsed = result.get("elapsed_seconds", 0)
+    verdict    = result.get("verdict", "UNVERIFIED")
+    css_cls    = _VERDICT_CSS.get(verdict, "fnd-v-unv")
+    meta       = VERDICT_META.get(verdict, {})
+    icon       = meta.get("icon", "❓")
+    desc_en    = meta.get("description", "")
+    desc_hi    = VERDICT_DESCRIPTIONS_HI.get(verdict, desc_en)
+    verdict_hi = VERDICT_LABELS_HI.get(verdict, verdict)
 
-    v_icon  = _esc(meta["icon"])
-    v_label = _esc(meta["label"])
-    v_desc  = _esc(meta["description"])
+    overall_conf = result.get("overall_confidence", 0)
+    ml_conf      = result.get("ml_confidence", 0)
+    ev_conf      = result.get("evidence_confidence", 0)
+    ling_conf    = result.get("linguistic_confidence", 0)
+    combined     = result.get("combined_score", 0.0)
+    model_name   = result.get("model_name", "")
+    elapsed      = result.get("elapsed_seconds", 0)
+    claim_short  = (result.get("claim", "") or "")[:120]
 
-    ov = result.get("overall_confidence",    0)
-    ml = result.get("ml_confidence",         0)
-    ev = result.get("evidence_confidence",   0)
-    li = result.get("linguistic_confidence", 0)
-    fc = result.get("fact_confidence",       0)
+    gauge = _gauge_svg(combined, css_cls)
 
-    bars = (
-        _conf_bar_html("Overall Confidence",    ov, bar_cls)
-        + _conf_bar_html("ML Model Confidence", ml, bar_cls)
-        + _conf_bar_html("Evidence Confidence", ev, bar_cls)
-        + _conf_bar_html("Linguistic Confidence", li, bar_cls)
-        + _conf_bar_html("Fact Confidence",     fc, bar_cls)
+    conf_bars = (
+        _conf_bar("Overall Confidence", "समग्र विश्वसनीयता",   overall_conf, "fnd-conf-fill-overall") +
+        _conf_bar("ML Model",          "एमएल मॉडल",            ml_conf) +
+        _conf_bar("Evidence",          "साक्ष्य",               ev_conf) +
+        _conf_bar("Linguistic",        "भाषाई",                 ling_conf)
     )
 
-    score = result.get("combined_score", 0.0)
-    model_name = _esc(result.get("ml_result", {}).get("model_name", "—"))
+    claim_block = ""
+    if claim_short:
+        claim_block = f'<div class="fnd-verdict-claim">{_esc(claim_short)}{"…" if len(result.get("claim",""))>120 else ""}</div>'
 
     return f"""
-<div class="fnd-result-wrap">
-
-  <!-- Verdict Badge -->
-  <div class="fnd-verdict {css_cls}">
-    <div class="fnd-verdict-icon">{v_icon}</div>
-    <div class="fnd-verdict-label">{v_label}</div>
-    <div class="fnd-verdict-desc">{v_desc}</div>
-    <div style="margin-top:8px;font-size:.75rem;opacity:.7">
-      Combined Score: {score:+.4f} &nbsp;|&nbsp;
-      Model: {model_name} &nbsp;|&nbsp;
-      Verified in {elapsed:.2f}s
+<div class="fnd-verdict-wrap {css_cls}">
+  <div class="fnd-verdict-header">
+    <span class="en">VERIFICATION VERDICT</span>
+    <span class="hi">सत्यापन निर्णय</span>
+  </div>
+  <div class="fnd-verdict-stamp">
+    <div class="fnd-verdict-icon" aria-hidden="true">{icon}</div>
+    <div class="fnd-verdict-text-block">
+      <div class="fnd-verdict-word">
+        <span class="en">{_esc(verdict)}</span>
+        <span class="fnd-verdict-word-hi hi">{_esc(verdict_hi)}</span>
+      </div>
+      <div class="fnd-verdict-desc">
+        <span class="en">{_esc(desc_en)}</span>
+        <span class="hi">{_esc(desc_hi)}</span>
+      </div>
     </div>
   </div>
-
-  <!-- 5 Confidence Bars -->
-  <div class="fnd-section">
-    <div class="fnd-section-title">Confidence Breakdown</div>
-    <div class="fnd-conf-section">{bars}</div>
+  {claim_block}
+  {gauge}
+  <div class="fnd-conf-section">
+    <div class="fnd-conf-title">
+      <span class="en">CONFIDENCE BREAKDOWN</span>
+      <span class="hi">विश्वसनीयता विवरण</span>
+    </div>
+    {conf_bars}
   </div>
-
+  <div class="fnd-verdict-meta">
+    Model: {_esc(model_name)} &nbsp;|&nbsp;
+    <span class="en">Verified in</span><span class="hi">जाँच में लगा समय</span>
+    {elapsed:.2f}s
+  </div>
 </div>"""
 
 
-def _verified_fact_html(vf: dict) -> str:
-    vf_type = vf.get("type", "insufficient")
-    summary = _esc(vf.get("summary", ""))
-    src     = _esc(vf.get("official_source",  ""))
-    url     = vf.get("official_url", "")
-    date    = _esc(vf.get("publication_date", ""))
-    misc    = _esc(vf.get("misconception",    ""))
-    corr    = _esc(vf.get("correct_fact",     ""))
-    related = vf.get("related_info", [])
-    trusted = vf.get("trusted_sources", [])
-
-    type_labels = {
-        "verified":     ("VERIFIED", "fnd-fact-verified"),
-        "debunked":     ("DEBUNKED", "fnd-fact-debunked"),
-        "mixed":        ("MIXED",    "fnd-fact-mixed"),
-        "insufficient": ("INSUFFICIENT EVIDENCE", "fnd-fact-insufficient"),
-    }
-    badge_text, badge_cls = type_labels.get(vf_type, ("UNKNOWN", "fnd-fact-insufficient"))
-
-    misc_block = f'<div class="fnd-fact-misconception">⚠️ <strong>Misconception:</strong> {misc}</div>' if misc else ""
-    corr_block = f'<div class="fnd-fact-correctfact">✅ <strong>Correct Fact:</strong> {corr}</div>' if corr else ""
-    src_block  = ""
-    if src or date:
-        link = f'<a href="{_esc(url)}" target="_blank" rel="noopener noreferrer">{src or _esc(url)}</a>' if url else src
-        src_block = f'<div class="fnd-fact-meta"><strong>Source:</strong> {link}'
-        if date:
-            src_block += f' &nbsp;|&nbsp; <strong>Published:</strong> {date}'
-        src_block += '</div>'
-
-    related_html = ""
-    if related:
-        items = "".join(f"<li>{_esc(r[:100])}</li>" for r in related[:4])
-        related_html = f'<ul class="fnd-related-list">{items}</ul>'
-
-    trusted_html = ""
-    if trusted:
-        t_items = " · ".join(_esc(t) for t in trusted[:3] if t)
-        trusted_html = f'<div class="fnd-fact-meta" style="margin-top:8px">📌 <strong>Sources:</strong> {t_items}</div>'
-
+# ── Verified Fact HTML ────────────────────────────────────────────────────────
+def _fact_html(vf: dict, verdict_css: str) -> str:
+    if not vf:
+        return ""
+    status   = vf.get("status", "INSUFFICIENT EVIDENCE")
+    detail   = vf.get("detail", "")
+    status_hi = VERDICT_LABELS_HI.get(status, status)
     return f"""
-<div class="fnd-fact-panel">
-  <h3>🔍 Verified Fact</h3>
-  <span class="fnd-fact-type-badge {badge_cls}">{badge_text}</span>
-  <div class="fnd-fact-summary">{summary}</div>
-  {src_block}
-  {misc_block}
-  {corr_block}
-  {related_html}
-  {trusted_html}
+<div class="fnd-fact-wrap {verdict_css}">
+  <div class="fnd-section-title">
+    <span class="en">🔎 VERIFIED FACT</span>
+    <span class="hi">🔎 सत्यापित तथ्य</span>
+  </div>
+  <div class="fnd-fact-verdict-tag">
+    <span class="en">{_esc(status)}</span>
+    <span class="hi">{_esc(status_hi)}</span>
+  </div>
+  <div class="fnd-fact-text">{_esc(detail)}</div>
 </div>"""
 
 
-def _source_card_html(article: dict) -> str:
-    name    = _esc(article.get("source_name",    "Unknown Source"))
-    title   = _esc(article.get("title",          "")[:90])
-    snippet = _esc(article.get("snippet",        "")[:200])
-    trust   = int(article.get("trust_score",     0))
-    cls     = article.get("classification",      "neutral")
-    date    = _esc(article.get("date",           "")[:30])
-    url     = article.get("url", "")
-    is_fc   = article.get("is_fact_check",       False)
-
-    cls_map = {
-        "supporting":    ("SUPPORTING",    "fnd-badge-supporting"),
-        "contradicting": ("CONTRADICTING", "fnd-badge-contradicting"),
-        "neutral":       ("NEUTRAL",       "fnd-badge-neutral"),
-    }
-    cls_label, cls_badge = cls_map.get(cls, ("NEUTRAL", "fnd-badge-neutral"))
-
-    fc_badge  = '<span class="fnd-src-badge fnd-badge-factcheck">FACT-CHECK</span>' if is_fc else ""
-    open_btn  = (
-        f'<a href="{_esc(url)}" target="_blank" rel="noopener noreferrer" '
-        f'class="fnd-src-link">Open Source ↗</a>'
-    ) if url else ""
-
-    trust_color = "#059669" if trust >= 95 else "#d97706" if trust >= 80 else "#64748b"
-
+# ── Source card HTML ──────────────────────────────────────────────────────────
+def _src_card(article: dict) -> str:
+    cls_map  = {"supporting": "sup", "contradicting": "con", "neutral": "neu"}
+    ctype    = article.get("classification", "neutral")
+    tab_cls  = f"fnd-src-tab fnd-src-tab-{cls_map.get(ctype, 'neu')}"
+    label_en = ctype.upper()
+    label_hi = EVIDENCE_LABELS_HI.get(ctype, ctype).upper()
+    domain   = _esc(article.get("domain", article.get("url", "")[:40]))
+    title    = _esc(article.get("title", ""))
+    snippet  = _esc((article.get("snippet") or "")[:140])
+    url      = _esc(article.get("url", "#"))
+    trust    = article.get("trust_score", 0)
     return f"""
 <div class="fnd-src-card">
-  <div class="fnd-src-header">
-    <span class="fnd-src-name">{name}</span>
-    <div class="fnd-src-badges">
-      <span class="fnd-src-badge {cls_badge}">{cls_label}</span>
-      {fc_badge}
-      <span class="fnd-trust-badge" style="color:{trust_color}">Trust: {trust}/100</span>
-    </div>
+  <div class="{tab_cls}">
+    <span class="en">{label_en}</span>
+    <span class="hi">{label_hi}</span>
   </div>
-  {"<div class='fnd-src-snippet'><strong>" + title + "</strong></div>" if title else ""}
-  {"<div class='fnd-src-snippet'>" + snippet + "</div>" if snippet else ""}
-  <div class="fnd-src-footer">
-    <span class="fnd-src-date">{date or "Date unavailable"}</span>
-    {open_btn}
-  </div>
+  <div class="fnd-src-domain">{domain}</div>
+  <div class="fnd-src-title">{title}</div>
+  {"" if not snippet else f'<div class="fnd-src-snippet">{snippet}…</div>'}
+  {"" if url == "#" else f'<a class="fnd-src-link" href="{url}" target="_blank" rel="noopener">↗ <span class="en">Read more</span><span class="hi">पढ़ें</span></a>'}
 </div>"""
 
 
-def _reasoning_html(reasoning: list[str]) -> str:
+# ── Sources HTML ──────────────────────────────────────────────────────────────
+def _sources_html(evidence_result: dict, verdict_css: str) -> str:
+    articles = evidence_result.get("articles", [])
+    n        = evidence_result.get("sources_found", 0)
+    if not articles:
+        no_src_en = STATIC_UI["result.no_sources"]["en"]
+        no_src_hi = STATIC_UI["result.no_sources"]["hi"]
+        return f"""
+<div class="fnd-sources-wrap {verdict_css}">
+  <div class="fnd-section-title">
+    <span class="en">📡 SOURCES</span><span class="hi">📡 स्रोत</span>
+  </div>
+  <div class="fnd-no-sources">
+    <span class="en">{_esc(no_src_en)}</span>
+    <span class="hi">{_esc(no_src_hi)}</span>
+  </div>
+</div>"""
+
+    cards = "".join(_src_card(a) for a in articles[:6])
+    return f"""
+<div class="fnd-sources-wrap {verdict_css}">
+  <div class="fnd-section-title">
+    <span class="en">📡 SOURCES ({n})</span>
+    <span class="hi">📡 स्रोत ({n})</span>
+  </div>
+  <div class="fnd-sources-grid">{cards}</div>
+</div>"""
+
+
+# ── Reasoning HTML ────────────────────────────────────────────────────────────
+def _reasoning_html(reasoning: list[str], verdict_css: str) -> str:
     if not reasoning:
         return ""
     items = "".join(f"<li>{_esc(r)}</li>" for r in reasoning)
     return f"""
-<div class="fnd-section">
-  <div class="fnd-section-title">Reasoning</div>
-  <ul class="fnd-reasoning-list">{items}</ul>
-</div>"""
-
-
-def _sources_html(evidence_result: dict) -> str:
-    articles = evidence_result.get("articles", [])
-    if not articles:
-        return f"""
-<div class="fnd-section">
-  <div class="fnd-section-title">Sources</div>
-  <p style="color:var(--text-muted);font-size:.84rem;margin:0">
-    No trusted sources found. Check your network connection.
-  </p>
-</div>"""
-
-    cards = "".join(_source_card_html(a) for a in articles[:6])
-    ev_score = evidence_result.get("evidence_score", 0)
-    direction = "FAKE signal" if ev_score > 0 else "REAL signal" if ev_score < 0 else "Neutral"
-    total = evidence_result.get("sources_found", 0)
-
-    return f"""
-<div class="fnd-section">
+<div class="fnd-reasoning-wrap {verdict_css}">
   <div class="fnd-section-title">
-    Trusted Sources Found: {total} &nbsp;|&nbsp;
-    Evidence Score: {ev_score:+.4f} ({_esc(direction)}) &nbsp;|&nbsp;
-    Avg Trust: {evidence_result.get("avg_trust_score", 0)}/100
+    <span class="en">🧠 REASONING</span><span class="hi">🧠 तर्क</span>
   </div>
-  <div class="fnd-src-list">{cards}</div>
+  <ol class="fnd-reasoning-list">{items}</ol>
 </div>"""
 
 
-def _error_html(message: str) -> str:
+# ── Full result HTML ──────────────────────────────────────────────────────────
+def build_result_html(result: dict) -> str:
+    if not result:
+        return _placeholder_html()
+    verdict    = result.get("verdict", "UNVERIFIED")
+    css_cls    = _VERDICT_CSS.get(verdict, "fnd-v-unv")
+    ev_result  = result.get("evidence_result", {})
+    vf         = result.get("verified_fact", {})
+    reasoning  = result.get("reasoning", [])
+
+    return (
+        _verdict_html(result) +
+        _fact_html(vf, css_cls) +
+        _sources_html(ev_result, css_cls) +
+        _reasoning_html(reasoning, css_cls)
+    )
+
+
+# ── Placeholder HTML ──────────────────────────────────────────────────────────
+def _placeholder_html() -> str:
     return f"""
-<div class="fnd-error-card">
-  <div class="fnd-error-title">⚠️ Verification Error</div>
-  <div class="fnd-error-msg">{_esc(message)}</div>
-  <div class="fnd-error-msg" style="margin-top:8px;font-size:.8rem;opacity:.8">
-    Please check your input and try again.
-    If using a URL, ensure the page is publicly accessible.
+<div class="fnd-placeholder">
+  {_icon("magnify")}
+  <div>
+    <span class="en">{STATIC_UI["result.placeholder"]["en"]}</span>
+    <span class="hi">{STATIC_UI["result.placeholder"]["hi"]}</span>
   </div>
 </div>"""
 
 
+# ── Loading HTML ──────────────────────────────────────────────────────────────
 def _loading_html() -> str:
     return """
-<div class="fnd-loading-card">
-  <div class="fnd-skeleton fnd-skeleton-box fnd-skeleton-mid"></div>
-  <div class="fnd-skeleton fnd-skeleton-box fnd-skeleton-wide"></div>
-  <div class="fnd-skeleton fnd-skeleton-box fnd-skeleton-narrow"></div>
-  <ul class="fnd-loading-steps">
-    <li>Cleaning &amp; extracting claims…</li>
-    <li>Analysing linguistic signals…</li>
-    <li>Running ML model…</li>
-    <li>Searching trusted sources…</li>
-    <li>Computing 9-verdict decision…</li>
-    <li>Building Verified Fact block…</li>
-  </ul>
-</div>"""
-
-
-def build_result_html(result: dict) -> str:
-    """Assemble the complete result HTML panel from a check_news() dict."""
-    if result.get("error") and not result.get("verdict"):
-        return _error_html(result["error"])
-
-    verdict_block = _verdict_html(result)
-    vf_block      = _verified_fact_html(result.get("verified_fact", {}))
-    src_block     = _sources_html(result.get("evidence_result", {}))
-    reason_block  = _reasoning_html(result.get("reasoning", []))
-
-    ev_res = result.get("evidence_result", {})
-    filt   = ev_res.get("filtered_out", 0)
-    filt_note = (
-        f'<div class="fnd-section-title" style="margin-top:8px;color:var(--text-muted)">'
-        f'🛡️ {filt} result(s) removed by spam / AI-blog / clickbait filters</div>'
-    ) if filt else ""
-
-    return f"""
-<div class="fnd-result-wrap">
-  {verdict_block}
-  {vf_block}
-  {src_block}
-  {filt_note}
-  {reason_block}
+<div class="fnd-loading">
+  <div class="fnd-shimmer-line" style="width:60%"></div>
+  <div class="fnd-shimmer-line" style="width:85%"></div>
+  <div class="fnd-shimmer-line" style="width:45%"></div>
+  <div class="fnd-shimmer-line" style="width:70%;margin-top:18px"></div>
+  <div class="fnd-shimmer-line" style="width:90%"></div>
 </div>"""
 
 
 # ── History HTML ──────────────────────────────────────────────────────────────
-
 def _history_html(entries: list[dict]) -> str:
     if not entries:
-        return '<p style="color:var(--text-muted);font-size:.86rem;padding:8px 0">No verifications yet.</p>'
-
-    icon_map = {
-        "REAL": "✅", "LIKELY REAL": "🟢", "PARTIALLY TRUE": "🔵",
-        "UNVERIFIED": "⚠️", "INSUFFICIENT EVIDENCE": "❓",
-        "MIXED": "🟡", "MISLEADING": "🟠", "LIKELY FAKE": "🔴", "FAKE": "❌",
-    }
-
-    rows = []
-    for i, e in enumerate(entries[:50]):
-        verdict = e.get("verdict", "UNVERIFIED")
-        icon    = icon_map.get(verdict, "❓")
+        return '<div style="font-size:.82rem;color:var(--ink-soft);padding:8px 0;font-style:italic">No verifications yet.</div>'
+    rows = ""
+    for e in entries[:100]:
+        v       = e.get("verdict", "?")
+        css_cls = _VERDICT_CSS.get(v, "fnd-v-unv")
+        v_hi    = VERDICT_LABELS_HI.get(v, v)
+        claim   = _esc((e.get("claim", "") or "")[:60])
         conf    = e.get("overall_confidence", 0)
-        preview = _esc(e.get("text_preview", "")[:70])
-        ts      = e.get("timestamp", "")[:16].replace("T", " ")
-        color   = _HIST_COLORS.get(verdict, "#64748b")
-        rows.append(f"""
-<div class="fnd-hist-row">
-  <span class="fnd-hist-time">{ts}</span>
-  <span class="fnd-hist-badge" style="background:{color}20;color:{color}">{icon} {_esc(verdict)}</span>
-  <span class="fnd-hist-badge" style="background:var(--bg-subtle);color:var(--text-muted)">{conf}%</span>
-  <span class="fnd-hist-preview">{preview}</span>
-</div>""")
-    return "".join(rows)
+        ts      = _esc(e.get("timestamp", ""))
+        rows += f"""
+<div style="display:flex;align-items:center;gap:10px;padding:8px 0;
+     border-bottom:1px solid var(--line);font-size:.8rem;">
+  <span class="{css_cls}" style="color:var(--verdict-color,var(--ink));
+        font-weight:600;min-width:100px;font-size:.75rem;">
+    <span class="en">{_esc(v)}</span><span class="hi">{_esc(v_hi)}</span>
+  </span>
+  <span style="flex:1;color:var(--ink-mid)">{claim}{"…" if len(e.get("claim",""))>60 else ""}</span>
+  <span style="font-family:var(--font-mono);color:var(--ink-soft);font-size:.68rem">{conf}%</span>
+  <span style="color:var(--ink-soft);font-size:.68rem">{ts}</span>
+</div>"""
+    return f'<div style="margin-top:6px">{rows}</div>'
 
 
-# ── Export Helpers ────────────────────────────────────────────────────────────
-
-_last_result: dict = {}
-
-
-def _save_txt(result: dict) -> str:
-    content  = export_txt(result)
-    fname    = report_filename(result.get("verdict", "unknown"), "txt")
-    tmp_path = os.path.join(tempfile.gettempdir(), fname)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    return tmp_path
+# ── Error HTML ────────────────────────────────────────────────────────────────
+def _error_html(msg: str) -> str:
+    return f"""
+<div class="fnd-fact-wrap fnd-v-fake" style="border-left:3px solid var(--flag)">
+  <div class="fnd-section-title">⚠ Error</div>
+  <div class="fnd-fact-text">{_esc(msg)}</div>
+</div>"""
 
 
-def _save_json(result: dict) -> str:
-    content  = export_json(result)
-    fname    = report_filename(result.get("verdict", "unknown"), "json")
-    tmp_path = os.path.join(tempfile.gettempdir(), fname)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    return tmp_path
-
-
-def _save_pdf(result: dict) -> str | None:
-    content = export_pdf(result)
-    if not content:
-        return None
-    fname    = report_filename(result.get("verdict", "unknown"), "pdf")
-    tmp_path = os.path.join(tempfile.gettempdir(), fname)
-    with open(tmp_path, "wb") as f:
-        f.write(content)
-    return tmp_path
-
-
-# ── Team Section HTML ─────────────────────────────────────────────────────────
-
+# ── Team section HTML ─────────────────────────────────────────────────────────
 def _team_html() -> str:
     cards = ""
     for dev in DEVELOPERS:
+        dev_id   = dev["id"]
+        icon_svg = _icon(dev.get("icon", "compass"))
+        hi_data  = TEAM_HI.get(dev_id, {})
+        role_hi  = hi_data.get("role", dev["role"])
+        badge_hi = hi_data.get("badge", dev["badge"])
         cards += f"""
-<div class="fnd-team-card">
-  <div class="fnd-avatar">{_esc(dev['avatar'])}</div>
+<div class="fnd-team-card" data-id="{_esc(dev_id)}"
+     onclick="fndOpenModal('{_esc(dev_id)}')"
+     role="button" tabindex="0" aria-label="View {_esc(dev['name'])} profile"
+     onkeydown="if(event.key==='Enter')fndOpenModal('{_esc(dev_id)}')">
+  <div class="fnd-team-icon">{icon_svg}</div>
   <div class="fnd-member-name">{_esc(dev['name'])}</div>
-  <div class="fnd-member-role">{_esc(dev['role'])}</div>
-  <span class="fnd-member-badge">{_esc(dev['badge'])}</span>
+  <div class="fnd-member-role">
+    <span class="en">{_esc(dev['role'])}</span>
+    <span class="hi">{_esc(role_hi)}</span>
+  </div>
+  <span class="fnd-member-badge">
+    <span class="en">{_esc(dev['badge'])}</span>
+    <span class="hi">{_esc(badge_hi)}</span>
+  </span>
 </div>"""
+
     return f"""
 <div class="fnd-team-section">
-  <div class="fnd-team-title">Project Team</div>
-  <div class="fnd-team-sub">{_esc(INSTITUTION)} &nbsp;·&nbsp; {_esc(BOARD)} &nbsp;·&nbsp; {_esc(INTERNSHIP)}</div>
+  <div class="fnd-team-hdr">
+    <div class="fnd-team-title">
+      <span class="en">{STATIC_UI["team.title"]["en"]}</span>
+      <span class="hi">{STATIC_UI["team.title"]["hi"]}</span>
+    </div>
+  </div>
+  <div class="fnd-team-sub">{_esc(INSTITUTION)} · {_esc(BOARD)} · {_esc(INTERNSHIP)}</div>
+  <div class="fnd-team-hint">
+    <span class="en">{STATIC_UI["team.tap_hint"]["en"]}</span>
+    <span class="hi">{STATIC_UI["team.tap_hint"]["hi"]}</span>
+  </div>
   <div class="fnd-team-grid">{cards}</div>
   <div class="fnd-institution">
-    AI &amp; Machine Learning Internship Project 2026<br>
-    Diploma Engineering · Computer Science &amp; Engineering<br>
+    AI &amp; Machine Learning Internship Project 2026 &nbsp;·&nbsp;
+    Diploma Engineering &nbsp;·&nbsp; Computer Science &amp; Engineering<br>
     <strong>Version {APP_VERSION}</strong>
+  </div>
+</div>
+{_modal_backdrop_html()}"""
+
+
+def _modal_backdrop_html() -> str:
+    """Pre-render ALL team member modals into hidden divs, shown by JS."""
+    modals = ""
+    for dev in DEVELOPERS:
+        dev_id  = dev["id"]
+        hi_data = TEAM_HI.get(dev_id, {})
+
+        # Skills (both langs)
+        skills_en  = "".join(f'<span class="fnd-skill-tag en">{_esc(s)}</span>'
+                              for s in dev.get("skills", []))
+        skills_hi  = "".join(f'<span class="fnd-skill-tag hi">{_esc(s)}</span>'
+                              for s in hi_data.get("skills", dev.get("skills", [])))
+
+        # Contributions (both langs)
+        contrib_en = "".join(f'<li class="en">{_esc(c)}</li>'
+                              for c in dev.get("contributions", []))
+        contrib_hi = "".join(f'<li class="hi">{_esc(c)}</li>'
+                              for c in hi_data.get("contributions", dev.get("contributions", [])))
+
+        # Quote (both langs)
+        quote_en   = _esc(dev.get("quote", ""))
+        quote_hi   = _esc(hi_data.get("quote", dev.get("quote", "")))
+
+        bio_en     = _esc(dev.get("bio", ""))
+        bio_hi     = _esc(hi_data.get("bio", dev.get("bio", "")))
+
+        role_en    = _esc(dev["role"])
+        role_hi    = _esc(hi_data.get("role", dev["role"]))
+        badge_en   = _esc(dev["badge"])
+        badge_hi   = _esc(hi_data.get("badge", dev["badge"]))
+
+        icon_svg   = _icon(dev.get("icon", "compass"))
+
+        close_en   = STATIC_UI["team.modal.close"]["en"]
+        close_hi   = STATIC_UI["team.modal.close"]["hi"]
+        skills_label_en = STATIC_UI["team.modal.skills"]["en"]
+        skills_label_hi = STATIC_UI["team.modal.skills"]["hi"]
+        contrib_label_en = STATIC_UI["team.modal.contributions"]["en"]
+        contrib_label_hi = STATIC_UI["team.modal.contributions"]["hi"]
+
+        modals += f"""
+<div class="fnd-modal" id="modal-{_esc(dev_id)}" role="dialog"
+     aria-labelledby="modal-name-{_esc(dev_id)}" aria-modal="true"
+     style="display:none">
+  <button class="fnd-modal-close" onclick="fndCloseModal()"
+          aria-label="Close">✕</button>
+  <div class="fnd-modal-head">
+    <div class="fnd-modal-icon">{icon_svg}</div>
+    <div>
+      <div class="fnd-modal-name" id="modal-name-{_esc(dev_id)}">{_esc(dev['name'])}</div>
+      <div class="fnd-modal-role">
+        <span class="en">{role_en}</span><span class="hi">{role_hi}</span>
+      </div>
+      <span class="fnd-modal-badge">
+        <span class="en">{badge_en}</span><span class="hi">{badge_hi}</span>
+      </span>
+    </div>
+  </div>
+  <div class="fnd-modal-body">
+    <div class="fnd-modal-bio">
+      <span class="en">{bio_en}</span>
+      <span class="hi">{bio_hi}</span>
+    </div>
+    <div class="fnd-modal-section-title">
+      <span class="en">{_esc(skills_label_en)}</span>
+      <span class="hi">{_esc(skills_label_hi)}</span>
+    </div>
+    <div class="fnd-modal-skills">{skills_en}{skills_hi}</div>
+    <div class="fnd-modal-section-title">
+      <span class="en">{_esc(contrib_label_en)}</span>
+      <span class="hi">{_esc(contrib_label_hi)}</span>
+    </div>
+    <ul class="fnd-modal-contrib">{contrib_en}{contrib_hi}</ul>
+    {"" if not quote_en else f'''
+    <div class="fnd-modal-quote">
+      <span class="en">{quote_en}</span>
+      <span class="hi">{quote_hi}</span>
+    </div>'''}
   </div>
 </div>"""
 
+    return f'<div class="fnd-modal-backdrop" id="fnd-modal-backdrop" onclick="fndBackdropClick(event)">{modals}</div>'
 
-# ── Gradio Event Handlers ─────────────────────────────────────────────────────
 
+# ── Plain text summary (for Quick Copy) ───────────────────────────────────────
+def _build_plain_summary(result: dict) -> str:
+    if not result:
+        return ""
+    v   = result.get("verdict", "?")
+    c   = (result.get("claim", "") or "")[:120]
+    oc  = result.get("overall_confidence", 0)
+    mlc = result.get("ml_confidence", 0)
+    evc = result.get("evidence_confidence", 0)
+    lc  = result.get("linguistic_confidence", 0)
+    mn  = result.get("model_name", "")
+    el  = result.get("elapsed_seconds", 0)
+    n   = result.get("evidence_result", {}).get("sources_found", 0)
+    return (
+        f"VERDICT: {v}\n"
+        f"Claim  : {c}\n"
+        f"Overall Confidence : {oc}%\n"
+        f"ML Confidence      : {mlc}% ({mn})\n"
+        f"Evidence Confidence: {evc}% ({n} sources)\n"
+        f"Linguistic         : {lc}%\n"
+        f"Time: {el:.2f}s"
+    )
+
+
+# ── Event handlers ────────────────────────────────────────────────────────────
 def run_check(text: str):
-    """Main handler: validate → check_news → build HTML → update history."""
     global _last_result
-
-    if not text or not text.strip():
-        err = _error_html("Please enter some news text or a URL to verify.")
-        return err, "", "", _history_html(_history.all())
+    if not text or len(text.strip()) < 5:
+        err = _error_html("Please enter at least 5 characters of news text or a URL.")
+        return err, "", gr.update(), _history_html(_history.all())
 
     result       = check_news(text.strip())
     _last_result = result
 
-    # Add to history (even errors, for debugging)
-    try:
-        _history.add(result)
-    except Exception as exc:
-        logger.warning("History add failed: %s", exc)
+    if result.get("error") and not result.get("verdict"):
+        return (
+            _error_html(result["error"]),
+            "",
+            gr.update(),
+            _history_html(_history.all()),
+        )
 
-    result_html   = build_result_html(result)
-    plain_summary = _build_plain_summary(result)
-    hist_html     = _history_html(_history.all())
-
-    return result_html, plain_summary, "", hist_html
-
-
-def _build_plain_summary(result: dict) -> str:
-    """One-paragraph plain-text summary for the copy textarea."""
-    v  = result.get("verdict",            "UNVERIFIED")
-    ov = result.get("overall_confidence", 0)
-    ml = result.get("ml_confidence",      0)
-    ev = result.get("evidence_confidence",0)
-    src = result.get("evidence_result", {}).get("sources_found", 0)
-    claim = result.get("primary_claim", "")[:120]
-    model = result.get("ml_result", {}).get("model_name", "—")
-    vf    = result.get("verified_fact", {})
-    lines = [
-        f"VERDICT: {v}",
-        f"Claim  : {claim}",
-        f"Overall Confidence : {ov}%",
-        f"ML Confidence      : {ml}% ({model})",
-        f"Evidence Confidence: {ev}% ({src} trusted sources)",
-        "",
-    ]
-    vf_sum = vf.get("summary", "")
-    if vf_sum:
-        lines.append(f"Fact   : {vf_sum[:200]}")
-    reasoning = result.get("reasoning", [])
-    if reasoning:
-        lines.append("")
-        lines.append("Reasoning:")
-        for r in reasoning:
-            lines.append(f"  • {r}")
-    return "\n".join(lines)
+    _history.add(result)
+    return (
+        build_result_html(result),
+        _build_plain_summary(result),
+        gr.update(value=""),
+        _history_html(_history.all()),
+    )
 
 
 def clear_all():
-    return "", "", "", ""
+    global _last_result
+    _last_result = None
+    return gr.update(value=""), _placeholder_html(), "", _history_html(_history.all())
 
 
-def load_sample(name: str):
-    text = SAMPLE_NEWS.get(name, "")
-    return text
+def load_sample(name: str) -> gr.update:
+    return gr.update(value=SAMPLE_NEWS.get(name, ""))
 
 
 def search_history(query: str):
-    matches = _history.search(query)
-    return _history_html([e for _, e in matches])
+    entries = _history.search(query) if query.strip() else _history.all()
+    return _history_html(entries)
 
 
 def clear_history():
@@ -523,75 +616,258 @@ def clear_history():
 
 
 def export_history_json():
-    content  = _history.export_all()
-    tmp_path = os.path.join(tempfile.gettempdir(), "fnd_history.json")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    return tmp_path
+    entries = _history.all()
+    if not entries:
+        return None
+    path = os.path.join(tempfile.gettempdir(), "fnd_history.json")
+    import json
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(entries, f, ensure_ascii=False, indent=2)
+    return path
 
 
 def download_txt():
     if not _last_result:
         return None
-    return _save_txt(_last_result)
+    path = os.path.join(tempfile.gettempdir(), report_filename(_last_result, "txt"))
+    content = export_txt(_last_result)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
 
 
 def download_json():
     if not _last_result:
         return None
-    return _save_json(_last_result)
+    path = os.path.join(tempfile.gettempdir(), report_filename(_last_result, "json"))
+    content = export_json(_last_result)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
 
 
 def download_pdf():
     if not _last_result:
         return None
-    return _save_pdf(_last_result)
+    path = os.path.join(tempfile.gettempdir(), report_filename(_last_result, "pdf"))
+    data = export_pdf(_last_result)
+    if data is None:
+        return None
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
 
 
-# ── Gradio Layout ─────────────────────────────────────────────────────────────
+# ── Client-side JS (injected once into <head>) ────────────────────────────────
+_HEAD_JS = """
+<script>
+// ── Theme toggle ──────────────────────────────────────────────────────────────
+(function(){
+  var root = null;
+  function getRoot() {
+    if (!root) root = document.querySelector('.fnd-root') || document.body;
+    return root;
+  }
+  var stored = localStorage.getItem('fnd-theme');
+  if (stored) { document.addEventListener('DOMContentLoaded', function(){ getRoot().setAttribute('data-theme', stored); updateThemeBtn(stored); }); }
 
+  window.fndToggleTheme = function() {
+    var r = getRoot();
+    var cur = r.getAttribute('data-theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    var next = cur === 'dark' ? 'light' : 'dark';
+    r.setAttribute('data-theme', next);
+    localStorage.setItem('fnd-theme', next);
+    updateThemeBtn(next);
+  };
+  function updateThemeBtn(theme) {
+    var btn = document.getElementById('fnd-theme-btn');
+    if (!btn) return;
+    var moonEN = btn.querySelector('.moon-en'), moonHI = btn.querySelector('.moon-hi');
+    var sunEN  = btn.querySelector('.sun-en'),  sunHI  = btn.querySelector('.sun-hi');
+    if (theme === 'dark') {
+      if (moonEN) moonEN.style.display = 'none';
+      if (moonHI) moonHI.style.display = 'none';
+      if (sunEN)  sunEN.style.display  = '';
+      if (sunHI)  sunHI.style.display  = '';
+    } else {
+      if (moonEN) moonEN.style.display = '';
+      if (moonHI) moonHI.style.display = '';
+      if (sunEN)  sunEN.style.display  = 'none';
+      if (sunHI)  sunHI.style.display  = 'none';
+    }
+  }
+})();
+
+// ── Language toggle ───────────────────────────────────────────────────────────
+(function(){
+  var root = null;
+  function getRoot() {
+    if (!root) root = document.querySelector('.fnd-root') || document.body;
+    return root;
+  }
+
+  // Auto-detect browser language on first load
+  document.addEventListener('DOMContentLoaded', function(){
+    root = document.querySelector('.fnd-root') || document.body;
+    var stored = localStorage.getItem('fnd-lang');
+    if (stored) {
+      root.setAttribute('data-lang', stored);
+    } else {
+      var lang = (navigator.language || navigator.userLanguage || 'en').toLowerCase();
+      var detected = (lang.startsWith('hi') || lang.startsWith('mr') || lang.startsWith('ne')) ? 'hi' : 'en';
+      root.setAttribute('data-lang', detected);
+    }
+    updateLangBtn(root.getAttribute('data-lang'));
+  });
+
+  window.fndToggleLang = function() {
+    var r = getRoot();
+    var cur = r.getAttribute('data-lang') || 'en';
+    var next = cur === 'en' ? 'hi' : 'en';
+    r.setAttribute('data-lang', next);
+    localStorage.setItem('fnd-lang', next);
+    updateLangBtn(next);
+  };
+
+  function updateLangBtn(lang) {
+    var btn = document.getElementById('fnd-lang-btn');
+    if (!btn) return;
+    var enSpan = btn.querySelector('.lang-en');
+    var hiSpan = btn.querySelector('.lang-hi');
+    if (lang === 'hi') {
+      if (enSpan) enSpan.textContent = 'EN';
+      if (hiSpan) hiSpan.textContent = '• हिं';
+      btn.title = 'Switch to English';
+    } else {
+      if (enSpan) enSpan.textContent = 'EN •';
+      if (hiSpan) hiSpan.textContent = 'हिं';
+      btn.title = 'हिंदी में बदलें';
+    }
+  }
+})();
+
+// ── Team member modal ─────────────────────────────────────────────────────────
+window.fndOpenModal = function(devId) {
+  var backdrop = document.getElementById('fnd-modal-backdrop');
+  if (!backdrop) return;
+  // Hide all modals first
+  backdrop.querySelectorAll('.fnd-modal').forEach(function(m){ m.style.display = 'none'; });
+  var modal = document.getElementById('modal-' + devId);
+  if (!modal) return;
+  modal.style.display = 'block';
+  backdrop.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  // Focus the close button for accessibility
+  var closeBtn = modal.querySelector('.fnd-modal-close');
+  if (closeBtn) setTimeout(function(){ closeBtn.focus(); }, 100);
+};
+
+window.fndCloseModal = function() {
+  var backdrop = document.getElementById('fnd-modal-backdrop');
+  if (!backdrop) return;
+  backdrop.classList.remove('open');
+  document.body.style.overflow = '';
+};
+
+window.fndBackdropClick = function(e) {
+  if (e.target === document.getElementById('fnd-modal-backdrop')) fndCloseModal();
+};
+
+// Close modal on Escape key
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape') fndCloseModal();
+});
+
+// ── Animate confidence bars on result render ──────────────────────────────────
+// Gradio re-renders gr.HTML() in place; MutationObserver triggers on each update.
+(function(){
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      m.addedNodes.forEach(function(node) {
+        if (node.nodeType !== 1) return;
+        var fills = node.querySelectorAll ? node.querySelectorAll('.fnd-conf-fill') : [];
+        fills.forEach(function(fill) {
+          var target = fill.style.width;
+          fill.style.width = '0%';
+          requestAnimationFrame(function(){
+            setTimeout(function(){ fill.style.width = target; }, 60);
+          });
+        });
+      });
+    });
+  });
+  document.addEventListener('DOMContentLoaded', function(){
+    var container = document.querySelector('.gradio-container') || document.body;
+    observer.observe(container, { childList: true, subtree: true });
+  });
+})();
+</script>
+"""
+
+
+# ── Gradio App ────────────────────────────────────────────────────────────────
 def create_app() -> gr.Blocks:
     sample_names = list(SAMPLE_NEWS.keys())
 
     with gr.Blocks(
         title=f"{APP_TITLE} V{APP_VERSION}",
         css=get_css(),
-        theme=gr.themes.Base(
-            primary_hue="blue",
-            secondary_hue="purple",
-        ),
+        head=_HEAD_JS,
+        theme=gr.themes.Base(),
     ) as app:
+
+        # ── Root wrapper (theme + lang state live here as data-* attrs) ─────
+        gr.HTML('<div class="fnd-root" id="fnd-root">')
 
         # ── Header ────────────────────────────────────────────────────────────
         gr.HTML(f"""
-<div class="fnd-header">
-  <div class="fnd-header-title">🔍 AI Fake News Detection</div>
-  <div class="fnd-header-sub">
-    9-Verdict System · Live Evidence · ML Classification · Verified Facts
+<header class="fnd-header">
+  <div class="fnd-wordmark">
+    <div class="fnd-wordmark-icon">{_icon("magnify")}</div>
+    <div>
+      <div class="fnd-wordmark-text">
+        <span class="en">AI Fake News Detection</span>
+        <span class="hi">एआई फेक न्यूज़ डिटेक्शन</span>
+      </div>
+      <div class="fnd-wordmark-sub">
+        <span class="en">{APP_TAGLINE}</span>
+        <span class="hi">9-निर्णय · लाइव साक्ष्य · एमएल · सत्यापन</span>
+      </div>
+    </div>
   </div>
-  <span class="fnd-version-badge">Version {APP_VERSION}</span>
-</div>""")
+  <div class="fnd-header-controls">
+    <button id="fnd-lang-btn" class="fnd-lang-toggle"
+            onclick="fndToggleLang()" title="हिंदी में बदलें / Switch to English">
+      <span class="lang-en">EN •</span>&nbsp;<span class="lang-hi">हिं</span>
+    </button>
+    <button id="fnd-theme-btn" class="fnd-theme-toggle"
+            onclick="fndToggleTheme()" title="Toggle dark / light mode">
+      <span class="moon-en" style="display:flex;align-items:center;gap:4px">{_icon("moon")}&nbsp;Dark</span>
+      <span class="moon-hi" style="display:none;align-items:center;gap:4px">{_icon("moon")}&nbsp;डार्क</span>
+      <span class="sun-en"  style="display:none;align-items:center;gap:4px">{_icon("sun")}&nbsp;Light</span>
+      <span class="sun-hi"  style="display:none;align-items:center;gap:4px">{_icon("sun")}&nbsp;लाइट</span>
+    </button>
+    <span class="fnd-version-pill">v{APP_VERSION}</span>
+  </div>
+</header>""")
 
-        # ── Main Body ─────────────────────────────────────────────────────────
+        # ── Main row ──────────────────────────────────────────────────────────
         with gr.Row(equal_height=False):
 
-            # Left: Input panel
-            with gr.Column(scale=5, min_width=320):
-                gr.HTML('<div class="fnd-input-card">')
+            # Left panel — input
+            with gr.Column(scale=5, min_width=300):
+                gr.HTML('<div class="fnd-panel">')
+                gr.HTML(f'<div class="fnd-panel-label"><span class="en">Claim to verify</span><span class="hi">जाँचने का दावा</span></div>')
 
                 news_input = gr.Textbox(
-                    placeholder=(
-                        "Paste news headline, article text, or a news URL here…\n"
-                        "Minimum 5 characters."
-                    ),
-                    lines=6,
-                    max_lines=14,
-                    label="News Text or URL",
-                    show_label=True,
+                    placeholder="Paste news headline, article text, or a URL…\nMinimum 5 characters.",
+                    lines=6, max_lines=14,
+                    label="", show_label=False,
                 )
 
                 # Sample buttons
-                gr.HTML('<div class="fnd-samples-grid">')
+                gr.HTML(f'<div class="fnd-samples-label"><span class="en">Try a sample →</span><span class="hi">उदाहरण आज़माएँ →</span></div>')
+                gr.HTML('<div class="fnd-samples-wrap">')
                 with gr.Row():
                     sample_btns = [
                         gr.Button(name, size="sm", elem_classes=["fnd-sample-btn"])
@@ -599,141 +875,93 @@ def create_app() -> gr.Blocks:
                     ]
                 gr.HTML("</div>")
 
-                with gr.Row():
-                    clear_btn   = gr.Button("🗑 Clear",   variant="secondary", size="sm")
-                    analyze_btn = gr.Button("🔍 Analyze", variant="primary",   size="lg",
-                                            elem_classes=["fnd-analyze-btn"])
+                gr.HTML('<div class="fnd-btn-row">')
+                clear_btn   = gr.Button("Clear",  size="sm",  elem_classes=["fnd-btn-clear"])
+                analyze_btn = gr.Button("Verify →", size="lg", elem_classes=["fnd-btn-analyze"])
+                gr.HTML("</div>")
 
-                gr.HTML("</div>")  # /fnd-input-card
+                gr.HTML("</div>")  # /fnd-panel
 
-                # ── Export panel ──────────────────────────────────────────────
-                with gr.Accordion("📥 Export Report", open=False):
-                    gr.HTML("""
-<div class="fnd-section" style="margin-top:0">
-  <div class="fnd-section-title">Download verification report</div>
-  <p style="font-size:.82rem;color:var(--text-muted);margin:0 0 10px">
-    Run a verification first, then download the report.
-  </p>
+                # Export accordion
+                with gr.Accordion("Export Report", open=False):
+                    gr.HTML(f"""
+<div style="padding:6px 0 4px;font-size:.82rem;color:var(--ink-soft)">
+  <span class="en">Run a verification first, then download the report.</span>
+  <span class="hi">पहले जाँच पूरी करें, फिर रिपोर्ट डाउनलोड करें।</span>
 </div>""")
-                    with gr.Row():
-                        txt_btn  = gr.Button("📄 TXT Report",  size="sm", elem_classes=["fnd-export-btn"])
-                        json_btn = gr.Button("📋 JSON Report", size="sm", elem_classes=["fnd-export-btn"])
-                        pdf_btn  = gr.Button("📑 PDF Report",  size="sm", elem_classes=["fnd-export-btn"])
-
-                    txt_file  = gr.File(label="TXT",  visible=False, interactive=False)
-                    json_file = gr.File(label="JSON", visible=False, interactive=False)
-                    pdf_file  = gr.File(label="PDF",  visible=False, interactive=False)
-
+                    gr.HTML('<div class="fnd-export-row">')
+                    txt_btn  = gr.Button("TXT",  size="sm", elem_classes=["fnd-export-btn"])
+                    json_btn = gr.Button("JSON", size="sm", elem_classes=["fnd-export-btn"])
+                    pdf_btn  = gr.Button("PDF",  size="sm", elem_classes=["fnd-export-btn"])
+                    gr.HTML("</div>")
+                    txt_file   = gr.File(label="TXT",  visible=False, interactive=False)
+                    json_file  = gr.File(label="JSON", visible=False, interactive=False)
+                    pdf_file   = gr.File(label="PDF",  visible=False, interactive=False)
                     plain_text = gr.Textbox(
-                        label="Quick Copy Summary",
-                        lines=6,
-                        interactive=False,
-                        show_copy_button=True,
+                        label="Quick Copy", lines=6,
+                        interactive=False, show_copy_button=True,
                     )
 
-                # ── History panel ─────────────────────────────────────────────
-                with gr.Accordion("📜 Verification History", open=False):
-                    gr.HTML("""
-<div class="fnd-section" style="margin-top:0">
-  <div class="fnd-section-title">Last 100 verifications (this session)</div>
-</div>""")
+                # History accordion
+                with gr.Accordion("Verification History", open=False):
+                    gr.HTML('<div style="font-size:.78rem;color:var(--ink-soft);padding:4px 0 8px">Last 100 verifications (this session)</div>')
                     hist_search = gr.Textbox(placeholder="Search history…", label="", show_label=False)
                     with gr.Row():
-                        hist_search_btn  = gr.Button("🔍 Search", size="sm")
-                        hist_clear_btn   = gr.Button("🗑 Clear All", size="sm", variant="stop")
-                        hist_export_btn  = gr.Button("💾 Export JSON", size="sm")
-
-                    hist_display = gr.HTML(
-                        _history_html(_history.all()),
-                        label="History",
-                    )
+                        hist_search_btn = gr.Button("Search",     size="sm")
+                        hist_clear_btn  = gr.Button("Clear All",  size="sm", variant="stop")
+                        hist_export_btn = gr.Button("Export JSON", size="sm")
+                    hist_display     = gr.HTML(_history_html(_history.all()))
                     hist_export_file = gr.File(label="History JSON", visible=False, interactive=False)
 
-            # Right: Results panel
-            with gr.Column(scale=7, min_width=360):
-                result_html = gr.HTML(
-                    value="""
-<div class="fnd-loading-card" style="opacity:.5">
-  <div style="text-align:center;color:var(--text-muted);font-size:.9rem;padding:24px">
-    Results will appear here after analysis.
-  </div>
-</div>""",
-                    label="Verification Result",
-                )
+            # Right panel — results
+            with gr.Column(scale=7, min_width=340):
+                result_html = gr.HTML(value=_placeholder_html(), label="")
 
-        # ── Team Section ──────────────────────────────────────────────────────
+        # ── Team section ──────────────────────────────────────────────────────
         gr.HTML(_team_html())
 
-        # ── Event Wiring ──────────────────────────────────────────────────────
+        # ── Close root wrapper ────────────────────────────────────────────────
+        gr.HTML("</div>")  # /fnd-root
 
-        # Analyze
+        # ── Event wiring ──────────────────────────────────────────────────────
         analyze_btn.click(
-            fn=run_check,
-            inputs=[news_input],
+            fn=run_check, inputs=[news_input],
             outputs=[result_html, plain_text, news_input, hist_display],
             show_progress="minimal",
-        ).then(
-            fn=lambda: gr.update(value=None, visible=False),
-            outputs=[txt_file],
-        )
+        ).then(fn=lambda: gr.update(visible=False), outputs=[txt_file])
 
-        # Sample buttons
         for btn, name in zip(sample_btns, sample_names):
-            btn.click(
-                fn=lambda n=name: load_sample(n),
-                outputs=[news_input],
-            )
+            btn.click(fn=lambda n=name: load_sample(n), outputs=[news_input])
 
-        # Clear
         clear_btn.click(
             fn=clear_all,
             outputs=[news_input, result_html, plain_text, hist_display],
         )
 
-        # Export
-        txt_btn.click(
-            fn=download_txt,
-            outputs=[txt_file],
-        ).then(fn=lambda: gr.update(visible=True), outputs=[txt_file])
+        txt_btn.click(fn=download_txt, outputs=[txt_file]
+            ).then(fn=lambda: gr.update(visible=True), outputs=[txt_file])
+        json_btn.click(fn=download_json, outputs=[json_file]
+            ).then(fn=lambda: gr.update(visible=True), outputs=[json_file])
+        pdf_btn.click(fn=download_pdf, outputs=[pdf_file]
+            ).then(fn=lambda: gr.update(visible=True), outputs=[pdf_file])
 
-        json_btn.click(
-            fn=download_json,
-            outputs=[json_file],
-        ).then(fn=lambda: gr.update(visible=True), outputs=[json_file])
-
-        pdf_btn.click(
-            fn=download_pdf,
-            outputs=[pdf_file],
-        ).then(fn=lambda: gr.update(visible=True), outputs=[pdf_file])
-
-        # History
-        hist_search_btn.click(
-            fn=search_history,
-            inputs=[hist_search],
-            outputs=[hist_display],
-        )
-        hist_clear_btn.click(
-            fn=clear_history,
-            outputs=[hist_display],
-        )
-        hist_export_btn.click(
-            fn=export_history_json,
-            outputs=[hist_export_file],
-        ).then(fn=lambda: gr.update(visible=True), outputs=[hist_export_file])
+        hist_search_btn.click(fn=search_history, inputs=[hist_search], outputs=[hist_display])
+        hist_clear_btn.click(fn=clear_history, outputs=[hist_display])
+        hist_export_btn.click(fn=export_history_json, outputs=[hist_export_file]
+            ).then(fn=lambda: gr.update(visible=True), outputs=[hist_export_file])
 
     return app
 
 
-# ── Entry Point ───────────────────────────────────────────────────────────────
-
+# ── Entry point ───────────────────────────────────────────────────────────────
 def main() -> None:
     app = create_app()
     app.launch(
-        server_name  = SERVER_HOST,
-        server_port  = SERVER_PORT,
-        share        = SERVER_SHARE,
-        show_error   = SERVER_SHOW_ERROR,
-        favicon_path = None,
+        server_name=SERVER_HOST,
+        server_port=SERVER_PORT,
+        share=SERVER_SHARE,
+        show_error=SERVER_SHOW_ERROR,
+        favicon_path=None,
     )
 
 
