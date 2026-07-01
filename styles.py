@@ -84,7 +84,7 @@ BASE_CSS = """
 /* ── Design tokens: dark mode (OS-level) ── */
 @media (prefers-color-scheme: dark) {
   :root { --_dark: 1; }
-  .fnd-root:not([data-theme="light"]) {
+  #fnd-root:not([data-theme="light"]) {
     --ink        : #D8E4F0;
     --ink-mid    : #A8BDD6;
     --ink-soft   : #6E8BAA;
@@ -122,7 +122,7 @@ BASE_CSS = """
 }
 
 /* ── Manual dark override (toggle button) ── */
-.fnd-root[data-theme="dark"] {
+#fnd-root[data-theme="dark"] {
   --ink        : #D8E4F0;
   --ink-mid    : #A8BDD6;
   --ink-soft   : #6E8BAA;
@@ -158,27 +158,58 @@ BASE_CSS = """
 /* ── Reset & base ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-.fnd-root {
+/* ── Gradio 5.x blank-space nuclear fix ─────────────────────────────────────
+   Gradio 5.x adds large padding/margin on html, body, #root,
+   .gradio-container, .main, .wrap, and svelte wrapper divs.
+   Every layer must be explicitly zeroed or the top shows as blank area.     */
+html, body {
+  margin      : 0 !important;
+  padding     : 0 !important;
+  background  : var(--paper) !important;
+}
+
+#root,
+.gradio-container,
+.gradio-container > .main,
+.gradio-container > .main > .wrap,
+.app {
+  margin      : 0 !important;
+  padding     : 0 !important;
+  gap         : 0 !important;
+  background  : var(--paper) !important;
+}
+
+.gradio-container {
+  max-width   : 100% !important;
+  min-height  : 100vh;
+}
+
+.gradio-container > .main {
+  max-width   : 1200px !important;
+  margin      : 0 auto !important;
+}
+
+/* Kill Gradio's default row/column gap at top level */
+.gradio-container .gap { gap: 0 !important; }
+
+/* Hide Gradio footer */
+footer { display: none !important; }
+
+/* Hide Gradio default label chrome where we inject our own */
+label.svelte-1hnfib2 { display: none !important; }
+
+#fnd-root {
   font-family : var(--font-body);
   color       : var(--ink);
   background  : var(--paper);
   min-height  : 100vh;
   transition  : background .25s, color .25s;
+  padding-bottom: 40px;
 }
-
-.gradio-container, .gradio-container > .main {
-  background  : var(--paper) !important;
-  max-width   : 1200px !important;
-  margin      : 0 auto !important;
-  padding     : 0 !important;
-}
-
-/* Hide Gradio default label chrome where we inject our own */
-.fnd-root label.svelte-1hnfib2 { display: none !important; }
 
 /* ── i18n visibility ── */
-.fnd-root:not([data-lang="hi"]) .hi { display: none !important; }
-.fnd-root[data-lang="hi"]       .en { display: none !important; }
+#fnd-root:not([data-lang="hi"]) .hi { display: none !important; }
+#fnd-root[data-lang="hi"]       .en { display: none !important; }
 """
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -280,8 +311,8 @@ COMPONENT_CSS = """
 }
 
 /* Gradio textbox override */
-.fnd-root .gr-textbox textarea,
-.fnd-root textarea {
+#fnd-root .gr-textbox textarea,
+#fnd-root textarea {
   font-family   : var(--font-body) !important;
   font-size     : .92rem !important;
   color         : var(--ink) !important;
@@ -293,8 +324,8 @@ COMPONENT_CSS = """
   transition    : border-color .15s;
   line-height   : 1.6;
 }
-.fnd-root .gr-textbox textarea:focus,
-.fnd-root textarea:focus {
+#fnd-root .gr-textbox textarea:focus,
+#fnd-root textarea:focus {
   border-color  : var(--slate) !important;
   outline       : none !important;
   box-shadow    : 0 0 0 3px color-mix(in srgb, var(--slate) 15%, transparent) !important;
@@ -369,7 +400,7 @@ COMPONENT_CSS = """
 .fnd-btn-analyze:active { transform: scale(.98); }
 
 /* Accordion overrides */
-.fnd-root details summary {
+#fnd-root details summary {
   font-family  : var(--font-body);
   font-size    : .85rem;
   font-weight  : 600;
@@ -381,7 +412,7 @@ COMPONENT_CSS = """
   margin-top   : 12px;
   user-select  : none;
 }
-.fnd-root details summary::-webkit-details-marker { display: none; }
+#fnd-root details summary::-webkit-details-marker { display: none; }
 
 /* Export buttons */
 .fnd-export-row {
@@ -1040,12 +1071,11 @@ MODAL_CSS = """
 #  DARK-MODE explicit overrides where CSS vars aren't enough
 # ══════════════════════════════════════════════════════════════════════════════
 DARK_CSS = """
-.fnd-root[data-theme="dark"] .gradio-container,
-.fnd-root[data-theme="dark"] .gradio-container > .main {
+#fnd-root[data-theme="dark"] {
   background: var(--paper) !important;
 }
-.fnd-root[data-theme="dark"] textarea,
-.fnd-root[data-theme="dark"] input[type="text"] {
+#fnd-root[data-theme="dark"] textarea,
+#fnd-root[data-theme="dark"] input[type="text"] {
   background: var(--paper-subtle) !important;
   color: var(--ink) !important;
   border-color: var(--line) !important;

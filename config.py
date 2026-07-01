@@ -299,8 +299,10 @@ EXPORT_MAX_HISTORY       : int   = 100     # was 20 in V4
 
 
 # ── Gradio Server ─────────────────────────────────────────────────────────────
-
+# Render injects a PORT environment variable — always use it if present.
+# Fallback to 7860 for local development and Hugging Face Spaces.
+import os as _os
 SERVER_HOST              : str   = "0.0.0.0"
-SERVER_PORT              : int   = 7860
+SERVER_PORT              : int   = int(_os.environ.get("PORT", 7860))
 SERVER_SHARE             : bool  = False
 SERVER_SHOW_ERROR        : bool  = True

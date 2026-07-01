@@ -665,7 +665,7 @@ _HEAD_JS = """
 (function(){
   var root = null;
   function getRoot() {
-    if (!root) root = document.querySelector('.fnd-root') || document.body;
+    if (!root) root = document.getElementById('fnd-root') || document.querySelector('.gradio-container') || document.body;
     return root;
   }
   var stored = localStorage.getItem('fnd-theme');
@@ -687,11 +687,11 @@ _HEAD_JS = """
     if (theme === 'dark') {
       if (moonEN) moonEN.style.display = 'none';
       if (moonHI) moonHI.style.display = 'none';
-      if (sunEN)  sunEN.style.display  = '';
-      if (sunHI)  sunHI.style.display  = '';
+      if (sunEN)  sunEN.style.display  = 'flex';
+      if (sunHI)  sunHI.style.display  = 'flex';
     } else {
-      if (moonEN) moonEN.style.display = '';
-      if (moonHI) moonHI.style.display = '';
+      if (moonEN) moonEN.style.display = 'flex';
+      if (moonHI) moonHI.style.display = 'flex';
       if (sunEN)  sunEN.style.display  = 'none';
       if (sunHI)  sunHI.style.display  = 'none';
     }
@@ -702,13 +702,13 @@ _HEAD_JS = """
 (function(){
   var root = null;
   function getRoot() {
-    if (!root) root = document.querySelector('.fnd-root') || document.body;
+    if (!root) root = document.getElementById('fnd-root') || document.querySelector('.gradio-container') || document.body;
     return root;
   }
 
   // Auto-detect browser language on first load
   document.addEventListener('DOMContentLoaded', function(){
-    root = document.querySelector('.fnd-root') || document.body;
+    root = document.getElementById('fnd-root') || document.querySelector('.gradio-container') || document.body;
     var stored = localStorage.getItem('fnd-lang');
     if (stored) {
       root.setAttribute('data-lang', stored);
@@ -814,10 +814,13 @@ def create_app() -> gr.Blocks:
         css=get_css(),
         head=_HEAD_JS,
         theme=gr.themes.Base(),
+        elem_id="fnd-root",
     ) as app:
 
-        # ── Root wrapper (theme + lang state live here as data-* attrs) ─────
-        gr.HTML('<div class="fnd-root" id="fnd-root">')
+        # NOTE: We no longer inject an unclosed <div class="fnd-root"> wrapper.
+        # Instead, gr.Blocks(elem_id="fnd-root") makes Gradio add id="fnd-root"
+        # directly on the .gradio-container element, so our CSS/JS targets it
+        # without any extra wrapper div causing blank space at top.
 
         # ── Header ────────────────────────────────────────────────────────────
         gr.HTML(f"""
@@ -919,9 +922,6 @@ def create_app() -> gr.Blocks:
 
         # ── Team section ──────────────────────────────────────────────────────
         gr.HTML(_team_html())
-
-        # ── Close root wrapper ────────────────────────────────────────────────
-        gr.HTML("</div>")  # /fnd-root
 
         # ── Event wiring ──────────────────────────────────────────────────────
         analyze_btn.click(
