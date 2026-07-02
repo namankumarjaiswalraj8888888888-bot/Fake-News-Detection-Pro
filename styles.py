@@ -155,45 +155,33 @@ BASE_CSS = """
   --sh-lg : 0 8px 24px rgba(0,0,0,.50);
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   GRADIO 5.x COMPLETE OVERRIDE
-   Every internal Gradio element that can leak its own colors/padding/shadow
-   is explicitly reset here so our design tokens are the only thing visible.
-   ══════════════════════════════════════════════════════════════════════════ */
-
 /* ── Reset & base ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* ── Gradio 5.x blank-space nuclear fix ─────────────────────────────────────
+   Gradio 5.x adds large padding/margin on html, body, #root,
+   .gradio-container, .main, .wrap, and svelte wrapper divs.
+   Every layer must be explicitly zeroed or the top shows as blank area.     */
 html, body {
   margin      : 0 !important;
   padding     : 0 !important;
   background  : var(--paper) !important;
-  color       : var(--ink) !important;
 }
 
-/* ── Kill ALL Gradio wrappers / spacing layers ── */
 #root,
 .gradio-container,
 .gradio-container > .main,
 .gradio-container > .main > .wrap,
-.app, .contain, .hide-container,
-div.svelte-5ft3bg,
-div.svelte-1hnfib2,
-div.svelte-1b8wtk3,
-div[class^="svelte-"],
-.block, .form, .box {
-  background  : transparent !important;
-  border      : none !important;
-  box-shadow  : none !important;
+.app {
   margin      : 0 !important;
   padding     : 0 !important;
   gap         : 0 !important;
+  background  : var(--paper) !important;
 }
 
 .gradio-container {
   max-width   : 100% !important;
   min-height  : 100vh;
-  background  : var(--paper) !important;
 }
 
 .gradio-container > .main {
@@ -201,143 +189,27 @@ div[class^="svelte-"],
   margin      : 0 auto !important;
 }
 
-/* ── Hide ALL Gradio chrome we don't want ── */
-footer,
-.footer,
-.api-docs,
-.built-with,
-.gradio-container ~ footer,
-nav.gradio-nav,
-.gradio-container .tabs > .tab-nav,
-.gradio-container .tabitem > .block-label,
-.gradio-container label.block-label,
-span.block-label,
-span.block-info,
-.gradio-container > .main > .wrap > .tabs,
-.copy-text,
-.eta-bar,
-.progress-bar-wrap,
-#error-message-bar {
-  display     : none !important;
-}
+/* Kill Gradio's default row/column gap at top level */
+.gradio-container .gap { gap: 0 !important; }
 
-/* ── Gradio Row / Column spacing fix ── */
-.gradio-container .gap,
-.gradio-container .flex-col,
-.gradio-container .row,
-.gradio-container [class*="gap-"] {
-  gap         : 0 !important;
-}
+/* Hide Gradio footer */
+footer { display: none !important; }
 
-/* ── Input elements — light mode ── */
-.gradio-container textarea,
-.gradio-container input[type="text"],
-.gradio-container input[type="search"] {
-  background    : var(--paper-subtle) !important;
-  color         : var(--ink) !important;
-  border        : 1px solid var(--line) !important;
-  border-radius : 10px !important;
-  font-family   : var(--font-body) !important;
-  font-size     : .92rem !important;
-  padding       : 10px 14px !important;
-  box-shadow    : none !important;
-  transition    : border-color .15s !important;
-}
-.gradio-container textarea:focus,
-.gradio-container input[type="text"]:focus {
-  border-color  : var(--slate) !important;
-  outline       : none !important;
-  box-shadow    : 0 0 0 3px color-mix(in srgb, var(--slate) 15%, transparent) !important;
-}
-.gradio-container textarea::placeholder,
-.gradio-container input::placeholder {
-  color         : var(--ink-soft) !important;
-}
+/* Hide Gradio default label chrome where we inject our own */
+label.svelte-1hnfib2 { display: none !important; }
 
-/* ── Buttons — let our own classes handle them ── */
-.gradio-container button {
-  font-family   : var(--font-body) !important;
-  transition    : all .15s !important;
-}
-
-/* ── Accordion ── */
-.gradio-container details {
-  background    : transparent !important;
-  border        : none !important;
-  box-shadow    : none !important;
-  padding       : 0 !important;
-}
-.gradio-container details > summary {
-  background    : transparent !important;
-  color         : var(--ink-mid) !important;
-  font-family   : var(--font-body) !important;
-  font-size     : .85rem !important;
-  font-weight   : 600 !important;
-  padding       : 10px 0 !important;
-  border-top    : 1px solid var(--line) !important;
-  border-bottom : none !important;
-  border-left   : none !important;
-  border-right  : none !important;
-  box-shadow    : none !important;
-  cursor        : pointer;
-  list-style    : none;
-}
-.gradio-container details > summary::-webkit-details-marker { display: none; }
-.gradio-container details > summary::marker { display: none; }
-.gradio-container details > summary::after {
-  content       : ' ▾';
-  color         : var(--ink-soft);
-  font-size     : .75rem;
-}
-.gradio-container details[open] > summary::after { content: ' ▴'; }
-
-/* ── File upload component ── */
-.gradio-container .file-preview,
-.gradio-container .upload-btn,
-.gradio-container [data-testid="file-upload"] {
-  background    : var(--paper-subtle) !important;
-  border        : 1px dashed var(--line-strong) !important;
-  color         : var(--ink-mid) !important;
-}
-
-/* ── App root ── */
 #fnd-root {
-  font-family   : var(--font-body);
-  color         : var(--ink);
-  background    : var(--paper);
-  min-height    : 100vh;
-  transition    : background .25s, color .25s;
+  font-family : var(--font-body);
+  color       : var(--ink);
+  background  : var(--paper);
+  min-height  : 100vh;
+  transition  : background .25s, color .25s;
   padding-bottom: 40px;
 }
 
 /* ── i18n visibility ── */
 #fnd-root:not([data-lang="hi"]) .hi { display: none !important; }
 #fnd-root[data-lang="hi"]       .en { display: none !important; }
-
-/* ── Dark mode — ALL input/textarea/button overrides for dark ── */
-@media (prefers-color-scheme: dark) {
-  .gradio-container:not([data-theme="light"]) textarea,
-  .gradio-container:not([data-theme="light"]) input[type="text"] {
-    background  : #0F1520 !important;
-    color       : #D8E4F0 !important;
-    border-color: #243350 !important;
-  }
-  .gradio-container:not([data-theme="light"]) textarea::placeholder,
-  .gradio-container:not([data-theme="light"]) input::placeholder {
-    color       : #6E8BAA !important;
-  }
-}
-#fnd-root[data-theme="dark"] textarea,
-#fnd-root[data-theme="dark"] input[type="text"] {
-  background    : #0F1520 !important;
-  color         : #D8E4F0 !important;
-  border-color  : #243350 !important;
-}
-#fnd-root[data-theme="dark"] textarea::placeholder,
-#fnd-root[data-theme="dark"] input::placeholder {
-  color         : #6E8BAA !important;
-}
-
 """
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1198,127 +1070,15 @@ MODAL_CSS = """
 # ══════════════════════════════════════════════════════════════════════════════
 #  DARK-MODE explicit overrides where CSS vars aren't enough
 # ══════════════════════════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════════════
-#  DARK MODE — complete overrides for both OS-level and manual toggle
-# ══════════════════════════════════════════════════════════════════════════════
 DARK_CSS = """
-/* ── Shared dark variables helper — applied when dark is active ── */
-.dark-active,
-#fnd-root[data-theme="dark"],
-@media (prefers-color-scheme: dark) { #fnd-root:not([data-theme="light"]) { } }
-
-/* Manual dark toggle */
-#fnd-root[data-theme="dark"],
-#fnd-root[data-theme="dark"] .gradio-container {
-  background    : var(--paper) !important;
-  color         : var(--ink) !important;
+#fnd-root[data-theme="dark"] {
+  background: var(--paper) !important;
 }
-
-/* All cards/panels in dark */
-#fnd-root[data-theme="dark"] .fnd-panel,
-#fnd-root[data-theme="dark"] .fnd-verdict-wrap,
-#fnd-root[data-theme="dark"] .fnd-fact-wrap,
-#fnd-root[data-theme="dark"] .fnd-sources-wrap,
-#fnd-root[data-theme="dark"] .fnd-reasoning-wrap,
-#fnd-root[data-theme="dark"] .fnd-team-section,
-#fnd-root[data-theme="dark"] .fnd-team-card,
-#fnd-root[data-theme="dark"] .fnd-src-card,
-#fnd-root[data-theme="dark"] .fnd-modal {
-  background    : var(--paper-raised) !important;
-  border-color  : var(--line) !important;
-}
-
-#fnd-root[data-theme="dark"] .fnd-header {
-  background    : var(--paper-raised) !important;
-  border-color  : var(--line) !important;
-}
-
-/* Text in dark */
-#fnd-root[data-theme="dark"] .fnd-wordmark-text,
-#fnd-root[data-theme="dark"] .fnd-member-name,
-#fnd-root[data-theme="dark"] .fnd-modal-name,
-#fnd-root[data-theme="dark"] .fnd-team-title,
-#fnd-root[data-theme="dark"] .fnd-verdict-word {
-  color         : var(--ink) !important;
-}
-
-/* Inputs in dark */
 #fnd-root[data-theme="dark"] textarea,
-#fnd-root[data-theme="dark"] input[type="text"],
-#fnd-root[data-theme="dark"] input[type="search"] {
-  background    : var(--paper-subtle) !important;
-  color         : var(--ink) !important;
-  border-color  : var(--line) !important;
-}
-#fnd-root[data-theme="dark"] textarea::placeholder,
-#fnd-root[data-theme="dark"] input::placeholder {
-  color         : var(--ink-soft) !important;
-}
-
-/* Buttons in dark */
-#fnd-root[data-theme="dark"] .fnd-btn-analyze {
-  background    : var(--ink) !important;
-  color         : #111827 !important;
-}
-#fnd-root[data-theme="dark"] .fnd-lang-toggle,
-#fnd-root[data-theme="dark"] .fnd-theme-toggle,
-#fnd-root[data-theme="dark"] .fnd-btn-clear,
-#fnd-root[data-theme="dark"] .fnd-export-btn,
-#fnd-root[data-theme="dark"] .fnd-sample-btn {
-  background    : var(--paper-subtle) !important;
-  border-color  : var(--line) !important;
-  color         : var(--ink-mid) !important;
-}
-
-/* Accordion in dark */
-#fnd-root[data-theme="dark"] details > summary {
-  color         : var(--ink-mid) !important;
-  border-color  : var(--line) !important;
-}
-
-/* Placeholder in dark */
-#fnd-root[data-theme="dark"] .fnd-placeholder {
-  background    : var(--paper-subtle) !important;
-  border-color  : var(--line-strong) !important;
-}
-
-/* ── OS-level dark mode (prefers-color-scheme) ── */
-@media (prefers-color-scheme: dark) {
-  html, body { background: #111827 !important; }
-
-  .gradio-container:not([data-theme="light"]),
-  .gradio-container:not([data-theme="light"]) > .main {
-    background    : #111827 !important;
-  }
-
-  #fnd-root:not([data-theme="light"]) .fnd-panel,
-  #fnd-root:not([data-theme="light"]) .fnd-verdict-wrap,
-  #fnd-root:not([data-theme="light"]) .fnd-fact-wrap,
-  #fnd-root:not([data-theme="light"]) .fnd-sources-wrap,
-  #fnd-root:not([data-theme="light"]) .fnd-reasoning-wrap,
-  #fnd-root:not([data-theme="light"]) .fnd-team-section,
-  #fnd-root:not([data-theme="light"]) .fnd-team-card,
-  #fnd-root:not([data-theme="light"]) .fnd-src-card,
-  #fnd-root:not([data-theme="light"]) .fnd-modal {
-    background    : var(--paper-raised) !important;
-    border-color  : var(--line) !important;
-  }
-
-  #fnd-root:not([data-theme="light"]) .fnd-header {
-    background    : var(--paper-raised) !important;
-    border-color  : var(--line) !important;
-  }
-
-  #fnd-root:not([data-theme="light"]) textarea,
-  #fnd-root:not([data-theme="light"]) input[type="text"] {
-    background    : var(--paper-subtle) !important;
-    color         : var(--ink) !important;
-    border-color  : var(--line) !important;
-  }
-  #fnd-root:not([data-theme="light"]) textarea::placeholder,
-  #fnd-root:not([data-theme="light"]) input::placeholder {
-    color         : var(--ink-soft) !important;
-  }
+#fnd-root[data-theme="dark"] input[type="text"] {
+  background: var(--paper-subtle) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
 }
 """
 

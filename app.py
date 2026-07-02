@@ -809,62 +809,11 @@ document.addEventListener('keydown', function(e){
 def create_app() -> gr.Blocks:
     sample_names = list(SAMPLE_NEWS.keys())
 
-    # Build a fully neutral Gradio theme — every colour token set to
-    # "transparent" or our own CSS-variable values so Gradio never
-    # paints its own dark/light chrome over our design.
-    _theme = gr.themes.Base(
-        primary_hue=gr.themes.colors.slate,
-        secondary_hue=gr.themes.colors.slate,
-        neutral_hue=gr.themes.colors.slate,
-        font=[gr.themes.GoogleFont("Inter"), "sans-serif"],
-    ).set(
-        body_background_fill="transparent",
-        body_background_fill_dark="transparent",
-        body_text_color="#14213D",
-        body_text_color_dark="#D8E4F0",
-        background_fill_primary="transparent",
-        background_fill_primary_dark="transparent",
-        background_fill_secondary="transparent",
-        background_fill_secondary_dark="transparent",
-        border_color_primary="#D8D3C7",
-        border_color_primary_dark="#243350",
-        block_background_fill="transparent",
-        block_background_fill_dark="transparent",
-        block_border_color="transparent",
-        block_border_color_dark="transparent",
-        block_shadow="none",
-        block_shadow_dark="none",
-        block_label_background_fill="transparent",
-        block_label_background_fill_dark="transparent",
-        block_label_text_color="#6B7C99",
-        block_label_text_color_dark="#6E8BAA",
-        input_background_fill="#F3F2EE",
-        input_background_fill_dark="#0F1520",
-        input_border_color="#D8D3C7",
-        input_border_color_dark="#243350",
-        input_border_color_focus="#3D5A80",
-        input_border_color_focus_dark="#5B8BB8",
-        input_placeholder_color="#6B7C99",
-        input_placeholder_color_dark="#6E8BAA",
-        button_primary_background_fill="#14213D",
-        button_primary_background_fill_dark="#D8E4F0",
-        button_primary_text_color="#FBFAF7",
-        button_primary_text_color_dark="#14213D",
-        button_secondary_background_fill="transparent",
-        button_secondary_background_fill_dark="transparent",
-        button_secondary_border_color="#D8D3C7",
-        button_secondary_border_color_dark="#243350",
-        button_secondary_text_color="#3D4F6B",
-        button_secondary_text_color_dark="#A8BDD6",
-        accordion_text_color="#3D4F6B",
-        accordion_text_color_dark="#A8BDD6",
-    )
-
     with gr.Blocks(
         title=f"{APP_TITLE} V{APP_VERSION}",
         css=get_css(),
         head=_HEAD_JS,
-        theme=_theme,
+        theme=gr.themes.Base(),
         elem_id="fnd-root",
     ) as app:
 
@@ -919,36 +868,20 @@ def create_app() -> gr.Blocks:
                     label="", show_label=False,
                 )
 
-                # Sample buttons — pure HTML to avoid Gradio wrapper gap
-                sample_btns_html = "".join(
-                    f'<button class="fnd-sample-btn" onclick="fndLoadSample({i})">{name}</button>'
-                    for i, name in enumerate(sample_names)
-                )
-                gr.HTML(f"""
-<div class="fnd-samples-label">
-  <span class="en">Try a sample →</span>
-  <span class="hi">उदाहरण आज़माएँ →</span>
-</div>
-<div class="fnd-samples-wrap">{sample_btns_html}</div>
-""")
-                # Hidden Gradio buttons wired to JS — never visible, just functional
-                sample_btns = [
-                    gr.Button(name, visible=False, elem_id=f"fnd-sample-{i}")
-                    for i, name in enumerate(sample_names)
-                ]
+                # Sample buttons
+                gr.HTML(f'<div class="fnd-samples-label"><span class="en">Try a sample →</span><span class="hi">उदाहरण आज़माएँ →</span></div>')
+                gr.HTML('<div class="fnd-samples-wrap">')
+                with gr.Row():
+                    sample_btns = [
+                        gr.Button(name, size="sm", elem_classes=["fnd-sample-btn"])
+                        for name in sample_names
+                    ]
+                gr.HTML("</div>")
 
-                gr.HTML("""
-<div class="fnd-btn-row">
-  <button class="fnd-btn-clear" onclick="fndClearAll()">
-    <span class="en">Clear</span><span class="hi">साफ़ करें</span>
-  </button>
-  <button class="fnd-btn-analyze" onclick="fndAnalyze()">
-    <span class="en">Verify →</span><span class="hi">जाँचें →</span>
-  </button>
-</div>""")
-                # Hidden Gradio functional buttons
-                clear_btn   = gr.Button("Clear",    visible=False, elem_id="fnd-clear-btn")
-                analyze_btn = gr.Button("Verify →", visible=False, elem_id="fnd-analyze-btn")
+                gr.HTML('<div class="fnd-btn-row">')
+                clear_btn   = gr.Button("Clear",  size="sm",  elem_classes=["fnd-btn-clear"])
+                analyze_btn = gr.Button("Verify →", size="lg", elem_classes=["fnd-btn-analyze"])
+                gr.HTML("</div>")
 
                 gr.HTML("</div>")  # /fnd-panel
 
