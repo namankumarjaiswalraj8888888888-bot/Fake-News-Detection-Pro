@@ -2,13 +2,24 @@
 # Government Polytechnic West Champaran -- AI & ML Internship 2026
 # Developed by: Naman Kumar, Parmeshwar Kumar, Amit Kumar,
 #               Prince Kumar Chaurasiya, Dhiraj Kumar, MD. Tausim Akhtar
+#
+# Changelog v5.1:
+#   - Sensationalism regex bug fixed (constants.py + utils.py)
+#   - Word-boundary keyword matching bug fixed (search.py + utils.py)
+#   - model.pkl / vectorizer.pkl verified and wired
+#   - Full UI redesign: forensic-dossier aesthetic
+#   - Dark / light mode: @media prefers-color-scheme + manual toggle
+#   - English / Hindi language toggle (browser auto-detect)
+#   - SVG evidence gauge with animated needle
+#   - Interactive team profile modals (click name → full biodata popup)
+#   - New module: i18n_strings.py (37 static keys, 9 verdict translations)
 
 # Core ML
 scikit-learn>=1.4.0,<2.0.0
 numpy>=1.26.0,<3.0.0
 pandas>=2.1.0,<4.0.0
 
-# Gradio 5.x (4.44.0 has a known HfFolder import bug)
+# Gradio 5.x
 gradio>=5.0.0,<6.0.0
 huggingface_hub>=0.24.0,<2.0.0
 
